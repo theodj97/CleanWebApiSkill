@@ -13,3 +13,7 @@ coverage-report/
 # OS
 .DS_Store
 Thumbs.db
+
+# Opencode
+.agents/
+skills-lock.json
