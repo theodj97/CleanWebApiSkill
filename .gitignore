@@ -1,0 +1,15 @@
+# Build output from injected examples
+bin/
+obj/
+TestResults/
+coverage-report/
+
+# Editors and IDEs
+.vs/
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
