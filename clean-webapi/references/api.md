@@ -159,6 +159,12 @@ create. The `HttpContext` is required because the ProblemDetails body includes i
   Swagger sidecar consumes `/openapi/v1.json`.
 - `OpenApiContractTests` asserts the operation ids, status codes and schema constraints. Update it with the
   feature.
+- The API serves only `GET /openapi/v1.json`; the Swagger UI is the local sidecar. The sidecar merges the
+  examples catalog and proxies `/api/*`; see `local-swagger.md`. A missing operation means the route group is
+  not registered or `MapOpenApi` is absent, not a UI setting.
+- A new endpoint is documented when it has its metadata, its contracts in `AppJsonSerializerContext`, its
+  schema descriptors, its entry in `OpenApiContractTests`, and an executable example in
+  `local/openapi/examples.json`. All five are part of the change.
 
 ## JSON source generation
 
@@ -230,4 +236,6 @@ The handler produces the business cases:
       and documented.
 - [ ] Component tests cover 200/201/204/400/401/403/404/409 as applicable.
 - [ ] `OpenApiContractTests` includes the new operation ids and status codes.
+- [ ] `local/openapi/examples.json` has an executable example for the operation (body/parameters/response),
+      consistent with the seed and `users.json`; `parameters` uses the array form.
 - [ ] README API table updated.

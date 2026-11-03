@@ -39,7 +39,7 @@ the template's sample (`Todo`).
 | 🗄 **Schema and secrets** | Ordered SQL scripts, seed, parameterised queries, sort catalogs and column maps, OpenBao, AppHost secrets. |
 | 🚀 **Native AOT** | Source-generated JSON, request delegates, no reflection, no `dynamic`, no suppressions; `dotnet publish` is the gate. |
 | 🧪 **Tests that earn their name** | What unit, component, functional and architecture tests prove, with fixtures, resets, builders and identities. |
-| 🏭 **Aspire** | The single AppHost, its modes, `db-init`, `openbao-init`, the Swagger sidecar and `devtoken`. |
+| 🏭 **Aspire + Swagger** | The single AppHost, its modes, `db-init`, `openbao-init`, `devtoken`, and the local Swagger sidecar with an executable example for every endpoint. |
 | ✅ **Gates** | Build, format, analyzers, all tests, coverage thresholds, vulnerable packages and commit convention. |
 
 ---
@@ -73,6 +73,7 @@ The skill triggers on natural language and accepts explicit modes:
 /clean-webapi add a component test for POST /api/Project
 /clean-webapi add a Priority column to the Todo table
 /clean-webapi add a Reports role that can read every owner's projects
+/clean-webapi run the local environment and verify the new endpoint in Swagger
 /clean-webapi review the working tree against the repository conventions
 /clean-webapi explain what each test project is for
 /clean-webapi remove the Todo sample feature
@@ -103,6 +104,7 @@ for confirmation before editing files. Small changes proceed and end with the ga
 │   │   ├── testing.md                  What each test project covers, fixtures, attributes, builders
 │   │   ├── test-catalog.md             What each existing test class protects, and which suite to run
 │   │   ├── aspire.md                   The single AppHost, modes, resources, devtoken, dashboard
+│   │   ├── local-swagger.md            Local run, Swagger sidecar, examples catalog, mandatory endpoint examples
 │   │   ├── native-aot.md               Rules, common IL warnings, fixes and publish gate
 │   │   ├── quality-gates.md            Commands, coverage thresholds, hooks, commit convention
 │   │   ├── review-checklist.md         A diff review rubric for this architecture
@@ -129,7 +131,8 @@ for confirmation before editing files. Small changes proceed and end with the ga
 |---|---|
 | 🧰 **.NET SDK** | 10.0.1xx, as pinned by the generated `global.json` (10.0.100, `latestFeature`). |
 | 🚀 **Aspire CLI** | 13.x for `aspire start` / `aspire run`; not needed for unit or architecture tests. |
-| 🐳 **Docker or Podman** | Component and functional tests start PostgreSQL and OpenBao containers. |
+| 🐳 **Docker or Podman** | Component/functional tests and the local Aspire + Swagger loop start PostgreSQL and OpenBao containers. |
+| 🔐 **HTTPS dev certificate** | `dotnet dev-certs https --trust` for the Local API and Swagger sidecar; on Linux export `SSL_CERT_DIR`. |
 | 🟢 **Node.js** | Only for the repository's `npm run` gates (`verify`, `coverage`, `format`). |
 | 🌐 **No external services** | Tests and local development use locally signed JWTs and local containers; no identity provider, no real database. |
 

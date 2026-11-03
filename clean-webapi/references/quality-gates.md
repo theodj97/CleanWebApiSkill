@@ -25,6 +25,21 @@ npm run coverage
 On Windows use `win-x64` for the publish RID. On Apple Silicon use `linux-arm64`/`osx-arm64` as appropriate,
 or a container. The publish must target a real RID; `dotnet publish` without one is not the AOT gate.
 
+## Local Swagger check
+
+When a change adds or changes an endpoint, the OpenAPI document or the examples catalog, run the local loop:
+
+```bash
+dotnet local/tools/devtoken.cs init   # once per machine
+aspire start
+# open the `swagger` resource from the dashboard, select the documented profile,
+# and execute every new example
+```
+
+The sidecar must merge the catalog without a `500`/problems list, and each example must return the documented
+status and body. This is a manual gate, not a CI command: report it separately and name anything that could
+not run. The full loop and catalog contract are in `local-swagger.md`.
+
 ## What `npm run verify` runs
 
 `scripts/pre-push.sh`:
@@ -136,6 +151,9 @@ project.
 - [ ] `dotnet test --solution` — all pass (or the exact projects that could not run are reported).
 - [ ] `npm run verify` — all gates pass.
 - [ ] `npm run coverage` — all thresholds pass.
+- [ ] For an endpoint, OpenAPI or local-example change: `aspire start`, the `swagger` resource loads the
+      merged document without problems, and every new example runs with its documented profile. If it could
+      not run, the report names the reason.
 - [ ] No secret, token, key or dashboard URL in the diff or the report.
-- [ ] Docs updated (README API table, tests/local docs when their contracts change).
+- [ ] Docs updated (README API table, local OpenAPI examples, tests/local docs when their contracts change).
 - [ ] One new test was shown to fail without the change.

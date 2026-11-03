@@ -15,6 +15,7 @@ state, then grade the run against the expectations.
 | 5 | Review a working tree with deliberate violations | A branch/worktree with: SQL built in an API handler, `Application` referencing `Infrastructure`, a new request missing from `AppJsonSerializerContext`, and a test using `Thread.Sleep` |
 | 6 | Remove the sample `Todo` feature | A generated repository with the `Todo` sample, its tests, SQL and local examples |
 | 7 | Add a secret for an external API key | A generated repository with OpenBao, the AppHost and `openbao-init` |
+| 8 | Start the local environment and make every endpoint testable in Swagger | A generated repository with the `Todo` sample, the `local/openapi` sidecar, Docker/Podman and the Aspire CLI |
 
 ## Running them
 
@@ -38,3 +39,4 @@ claims a gate passed without showing the command and exit code fails the honesty
 - No lowered coverage threshold.
 - No test skipped without being reported.
 - The final report names the commands that actually ran and the ones that could not run.
+- A local Swagger check that was not run is reported as not run, never assumed.

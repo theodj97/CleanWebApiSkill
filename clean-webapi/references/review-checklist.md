@@ -7,7 +7,8 @@ Use this for a repository-specific review. For the full two-axis review (Standar
 
 1. Pin the fixed point and capture `git diff <fixed-point>...HEAD` (or the working tree if the user asked for
    that). Confirm it is non-empty.
-2. Read `AGENTS.md`, the README architecture/API sections and the nearest existing feature.
+2. Read `AGENTS.md`, the README architecture/API sections, the nearest existing feature and, for endpoint
+   changes, `local/openapi/examples.json` plus `local-swagger.md`.
 3. Map every changed file to a layer. A file in the wrong layer is a structural finding, even if the code
    works.
 4. Apply the hard rules first; they are violations, not style preferences.
@@ -27,7 +28,7 @@ Use this for a repository-specific review. For the full two-axis review (Standar
 | Secrets | A secret/connection string in `appsettings*.json`, a test, a log or a report; `API_KEY` passed to the app as env | OpenBao + `openbao-init`; redact; rotate |
 | Tests | No test for a new behaviour; a test sleeps; hardcoded id/token; reset after the test; a test obtains a token from login | Add the right test at the right level; `Eventually`; `TestData`; `[ResetDatabase]`; `TestTokenIssuer` |
 | Gates | A warning is suppressed; coverage threshold lowered; a test project skipped without reporting | Fix the cause; add tests; report what could not run |
-| Contract | Endpoint/response/schema changed without OpenAPI/JSON/README updates | Add the contract entry and the doc row |
+| Contract | Endpoint/response/schema changed without OpenAPI/JSON/README updates, or a new operation without an executable local Swagger example | Add the contract entry, the doc row and `local/openapi/examples.json` with seed/profile data |
 
 ## Layer checks
 
@@ -76,6 +77,8 @@ Use this for a repository-specific review. For the full two-axis review (Standar
 - [ ] New contracts in `AppJsonSerializerContext`.
 - [ ] New schemas in `{Feature}OpenApiSchemas`, with `nameof` and `{Feature}Constraints`; the tag is registered;
       descriptions name this feature's fields and statuses, not the Todo sample's.
+- [ ] The operation appears in the API's `/openapi/v1.json` with its name, tag, summary, description,
+      success/error status codes and schema; `OpenApiContractTests` includes its ids and status codes.
 - [ ] New `Error` mapped in `ApiResultExtensions.ResolveError` (body through `ProblemDetailsFactory`) and
       documented.
 - [ ] ProblemDetails consistency (400/404/405/malformed JSON), including the `traceId` and uniform `type`.
@@ -86,6 +89,9 @@ Use this for a repository-specific review. For the full two-axis review (Standar
 - [ ] Unique index matches the business rule; indexes cover the filters.
 - [ ] Seed uses devtoken emails/roles and covers every state.
 - [ ] `db-init` readiness query references an existing table.
+- [ ] Every new operation has an executable example in `local/openapi/examples.json` (body/parameters/response),
+      with `parameters` as an array, values matching the seed and `users.json`.
+- [ ] The `swagger` resource merges the catalog without `500`/problems.
 - [ ] No volume/persistent container; no external service.
 
 ### Tests
@@ -110,7 +116,8 @@ Use this for a repository-specific review. For the full two-axis review (Standar
 
 - [ ] README API table row for every new endpoint.
 - [ ] `tests/README.md` updated only if categories/identities/coverage changed.
-- [ ] `local/local-development.md` updated if topology/seed/tokens changed.
+- [ ] `local/openapi` examples updated for every new operation; `local/local-development.md` only if
+      topology/seed/tokens changed.
 - [ ] `AGENTS.md` updated only if AOT/hook rules changed.
 
 ## Judgement checks
@@ -131,6 +138,8 @@ These are not hard violations unless they cause a real problem; label them as su
 - **Test redundancy**: a component test that repeats a unit test without adding the HTTP/database dimension.
 - **Slow test**: a component test that could be a unit test; move it.
 - **Docs drift**: an API table that no longer matches the routes.
+- **Catalog drift**: local examples that use ids/emails/statuses not in the seed, cover only one state, or no
+  longer match the document; every example must be re-runnable after `aspire start`.
 
 ## Output format
 

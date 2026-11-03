@@ -31,7 +31,7 @@ genuinely does not need it, and say so in the plan.
 | 3 | Infrastructure | `Repositories/{Feature}/{Feature}Repository.cs`, `Repositories/{Feature}/Helpers/{Feature}Table.cs`, `Helpers/{Feature}SortColumns.cs` |
 | 4 | Database | `local/database/000N__{feature}.sql`, `local/database/seed/000N__{feature}.sql` |
 | 5 | API | `Routes/{Feature}/{Verb}/{Verb}{Feature}Request.cs`, `Models/Responses/{Feature}/{Feature}Response.cs`, `Routes/{Feature}/{Feature}Endpoints.cs`, `Routes/{Feature}/{Feature}Routes.cs`; `Configuration/AppJsonSerializerContext.cs`, `Configuration/{Feature}OpenApiSchemas.cs`, `Configuration/OpenApiConfiguration.cs`, `ConfigureServices.cs`, `Extensions/EndpointExtension.cs` |
-| 6 | Local | `local/openapi/examples.json`, `bodies/`, `responses/`; `local/tools/devtoken.json` / `local/openapi/users.json` if roles change; `local/aspire/.../AppHost.cs` only if a resource changes |
+| 6 | Local | `local/openapi/examples.json`, `bodies/`, `responses/` (one executable example per operation); `local/tools/devtoken.json` / `local/openapi/users.json` if roles change; `local/aspire/.../AppHost.cs` only if a resource changes |
 | 7 | Tests | Unit validator + handler, component endpoints/auth/ownership, OpenAPI contract, functional flow, architecture rules, `Tests.Shared` builder/repository |
 | 8 | Docs | `README.md` API table, `tests/README.md` if categories/identities change, `local/local-development.md` if topology/seed/tokens change |
 
@@ -228,16 +228,33 @@ and the `db-init` job exits 0.
   `DescribePaging`, `DescribeSort`, `DescribeStatus`). `DescribeSort` writes the Todo catalog and
   `DescribeStatus` derives from `ETodoStatus`; for another feature override the sort description with
   `{Feature}SortCatalog.Describe()` and, if its status values differ, set `schema.Enum` from its enum.
+- Document the operation: unique `WithName`, `WithSummary`, `WithDescription`, success `Produces` and error
+  `ProducesProblem`; register the feature tag in `OpenApiConfiguration`; add the operation ids and status codes
+  to `OpenApiContractTests`. A new endpoint without the document entry fails the contract test; do not weaken
+  the test.
 
 **Done when:** every route has a policy, a name, a summary, a description and the documented status codes;
-every contract is in the JSON context; the OpenAPI document contains the new schemas and operations; the
+every contract is in the JSON context; the OpenAPI document contains the new schemas and operations;
+`OpenApiContractTests` includes them; and every new operation has an executable local Swagger example; the
 endpoint adapter is the only place that maps `Result` to `IResult`.
 
 ## 6. Local environment
 
-- Add examples to `local/openapi/examples.json` for the new operations, with bodies under
-  `local/openapi/bodies/` and responses under `local/openapi/responses/`. Keep the example values consistent
-  with the seed (same ids, emails and states).
+Every new operation needs an executable example. The catalog format, the example matrix and the verification
+loop are in `local-swagger.md`; the complete `Project` catalog is in `../assets/examples/local/openapi-examples.md`;
+this is the touch list.
+
+- Add an entry to `local/openapi/examples.json` for **every** new operation. A write operation needs a request
+  body example; a route with parameters needs a `parameters` entry; every operation needs a success response
+  example. Add profile-specific examples when ownership or the policy changes the result.
+- Put bodies under `local/openapi/bodies/` and responses under `local/openapi/responses/`; use inline `value`
+  for a short parameter or a small `ProblemDetails`.
+- Use the seed's ids, emails and statuses, and the profiles in `local/openapi/users.json` (`user`,
+  `operator`, `admin`, `external`, `no-role`). Do not invent a second fixture.
+- Error responses get a generic `ProblemDetails` example from the sidecar; add an explicit one only when the
+  error is part of what the endpoint demonstrates (for example `409` on a duplicate name).
+- The sidecar re-reads the catalog on every request: refresh Swagger after an edit. `users.json` is read at
+  startup: restart the `swagger` resource after changing it.
 - If the feature adds a role, add a profile to `local/tools/devtoken.json` and a user to
   `local/openapi/users.json`; keep the emails and roles identical.
 - A new table normally needs no AppHost change. A new resource, container or secret does: update
@@ -245,8 +262,9 @@ endpoint adapter is the only place that maps `Result` to `IResult`.
 - If the feature changes the local JWT, OpenBao or database topology, run `aspire start` and verify the
   resource graph and the seed.
 
-**Done when:** the Swagger profile picker can call every new operation with seeded data, and a fresh
-`aspire start` rebuilds schema + seed without manual SQL.
+**Done when:** the seed covers every state the endpoints accept, every new operation has an example that runs
+in Swagger with the documented profile, the sidecar merges the catalog without problems (no `500` in the
+`swagger` logs), and a fresh `aspire start` rebuilds schema + seed without manual SQL.
 
 ## 7. Tests
 
@@ -265,6 +283,7 @@ Write the smallest set that proves the behaviour at the right level. A feature n
 | Flow | `Api.FunctionalTests` | Create → read → filter/update/delete through real HTTP as a separate process |
 | Architecture | `ArchitectureTests` | New ports/filters live in Application, repositories only under `Repositories`, no outer-layer dependency. If the feature adds repository helpers, generalize the hardcoded `Todo.Helpers` condition in `StructureTests` to `.Contains(".Helpers")`. |
 | OpenAPI contract | `Api.ComponentTests` | New operation ids, tag, status codes and schema constraints appear in `/openapi/v1.json`. `OpenApiContractTests` asserts the exact operation-id set, so a new endpoint fails it until the ids/paths are added. |
+| Local OpenAPI examples | `local/openapi/{App}.OpenApiExamples.UnitTests` + manual Swagger run | The catalog merges, the profile token is minted, and every new example runs against the seed with its documented profile. |
 
 Also add to `Tests.Shared`:
 

@@ -36,10 +36,14 @@ code alone does not show; treat them as ADR summaries.
 | **Builder** | A test helper with valid defaults (`ProjectBuilder`). |
 | **Resetter** | A Respawn-based helper that empties the database between tests. |
 | **Local mode** | `aspire run` / `aspire start`: dashboard, telemetry, seed, Swagger sidecar. |
+| **Swagger sidecar** | The local-only `local/openapi` project: fetches `/openapi/v1.json`, merges the examples catalog, serves Swagger UI with the profile picker, and proxies `/api/*` to the API. |
+| **Examples catalog** | `local/openapi/examples.json` plus `bodies/` and `responses/`: executable request, parameter and response examples keyed by `METHOD /path`. |
+| **Profile picker** | The Swagger UI header control that mints an HS256 token for a profile in `users.json` (`user`, `operator`, `admin`, `external`, `no-role`). |
+| **Local Swagger check** | The manual gate: `aspire start`, open the `swagger` resource, select the documented profile and run every new example. |
 | **Component mode** | Tests: infrastructure + schema, API in-process. |
 | **Functional mode** | Tests: infrastructure + schema + API as a separate process, HTTP only. |
 | **AppHost contract** | `AppHostContract.cs`: run modes, resource names, config keys and JWT trust mapping shared by the AppHost and tests. |
-| **Gate** | A command that must pass before a change is done (`build`, `publish`, `test`, `verify`, `coverage`). |
+| **Gate** | A command that must pass before a change is done (`build`, `publish`, `test`, `verify`, `coverage`); endpoint/example changes also run the manual local Swagger check. |
 | **Source of truth** | The one place a fact lives: schema in `local/database`, table names in `{Feature}Table`, config in `AppSettings`, local topology in the AppHost. |
 
 ## Decisions
@@ -191,3 +195,18 @@ plumbing hides the convention in six copies.
 
 **Consequence:** do not fill an all-nullable DTO and cast it later; add a projection. Do not put owner or result
 mapping back in the route group; add an adapter method.
+
+### D-015 — Every endpoint ships its OpenAPI contract and a local example
+
+**Decision:** a new endpoint is complete only when it appears in `/openapi/v1.json` with its metadata, status
+codes and schema, `OpenApiContractTests` covers its operation id and status codes, and
+`local/openapi/examples.json` has an executable example with bodies/parameters that match the seed and a
+profile from `users.json`.
+
+**Reason:** the document is the caller's contract and Swagger is how the team exercises it locally. An
+endpoint that is absent from the document or has no runnable example is invisible in practice, even when the
+code works.
+
+**Consequence:** adding an endpoint edits the API metadata, JSON context and schema descriptors, the OpenAPI
+contract test, the seed when it needs a new state, and the local catalog. The local Swagger check is manual
+and reported, not assumed.

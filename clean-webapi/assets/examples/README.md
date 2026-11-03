@@ -82,6 +82,10 @@ assets/examples/
     └── ProjectArchitectureTests.md
 ```
 
+`local/openapi-examples.md` is the executable catalog for the feature: seed-consistent bodies, a `parameters`
+array for route ids and response examples. The catalog contract and the local verification loop are in
+`../../references/local-swagger.md`.
+
 ## What is intentionally omitted
 
 - Update and delete. They follow the same shape as create/get: `UpdateProjectInput` + validator + handler,
@@ -100,7 +104,7 @@ assets/examples/
 3. Infrastructure (table → sort columns → repository).
 4. Database (schema → seed).
 5. API (request/response → endpoint adapter → schemas → route group → registration).
-6. Local (OpenAPI examples).
+6. Local (OpenAPI examples) and run the local Swagger check.
 7. Tests (builder/repository → fixture → unit → sort alignment → component → functional → architecture).
    Update `ComponentTests/OpenApiContractTests.cs` too: it asserts the exact operation-id set.
 8. Docs (README API table) and gates.

@@ -2,6 +2,32 @@
 
 Maintainer-only. Not loaded by agents.
 
+## 2026-11-03 — Local Swagger contract and mandatory endpoint examples
+
+**Method:** compared the skill with `CleanWebApiTemplate` `HEAD` (`local/local-development.md`,
+`local/openapi/README.md`, `local/aspire/{App}.AppHost/AppHost.cs`, `OpenApiExamplesMerger.cs` and
+`local/openapi/Program.cs`). Added `references/local-swagger.md`, made the endpoint/document/example contract
+a non-negotiable, wired it into Phases 5 and 6, the review checklist, the quality gates, the glossary, the
+`Project` local example and the evals.
+
+**Findings that shaped the change:**
+
+1. The skill described the sidecar but not the local loop: start, dashboard, `swagger` resource, profile
+   picker, execution and verification.
+2. The catalog contract was incomplete: `parameters` is a JSON array, not an object; `body` and `value` are
+   mutually exclusive; the sidecar re-reads the catalog on every request and returns `500` with problems when
+   an entry does not match the document.
+3. The `Project` example used the object form for `parameters`, which the merger rejects. It now uses the
+   array form and includes the `409` `value` example.
+4. The previous verification log recorded that no manual `aspire start` + Swagger walkthrough had been run;
+   the new reference and eval #8 make that check explicit and require reporting when it cannot run.
+
+**Verification:** JSON syntax of `evals.json` and every fenced catalog snippet checked with a JSON parser.
+`dotnet test --project local/openapi/CleanWebApiTemplate.OpenApiExamples.UnitTests/CleanWebApiTemplate.OpenApiExamples.UnitTests.csproj`
+passed (33/33) against the template. A manual `aspire start` + Swagger UI walkthrough was not run: the local
+HTTPS development certificate is not trusted in this environment, and the check would need `dotnet dev-certs
+https --trust` (a machine-level change).
+
 ## 2026-11-03 — Architecture refresh of the skill
 
 **Method:** aligned the skill with `CleanWebApiTemplate` `HEAD` after the architecture review applied

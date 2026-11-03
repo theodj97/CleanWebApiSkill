@@ -98,16 +98,18 @@ Never use a login endpoint to obtain local/test tokens. Never commit the key or 
 
 ## Swagger sidecar
 
-`local/openapi/` is a small project that:
+`local/openapi/` is a local-only project that fetches the API's `/openapi/v1.json`, merges the examples from
+`examples.json` (`bodies/`, `responses/`), serves Swagger UI with a profile picker (`users.json`) and proxies
+`/api/*` to the API. The API itself serves only the document. The sidecar is started only in Local mode; the
+Component and Functional tests never start it.
 
-- fetches the API's `/openapi/v1.json`;
-- merges the examples from `examples.json` (`bodies/`, `responses/`);
-- serves its own Swagger UI with a profile picker (`users.json`);
-- proxies `/api/*` to the API;
-- is started only in Local mode.
+The AppHost adds it as the `swagger` project resource with `API_BASE_URL`, `EXAMPLES_PATH` and the
+`LocalLogin.*` values, `WaitFor(api)` and a `/health` check. The sidecar re-reads the catalog and the document
+on every request; `users.json` is read at startup.
 
 The sidecar's `examples.json` keys are OpenAPI operation paths (`POST /api/Project/filter`, `POST /api/Project`).
-A new endpoint without examples still appears; add examples when the feature has meaningful states.
+Every new operation needs an executable example; a missing or mismatched entry makes the merged document return
+`500` with the list of problems. Local run, catalog contract and verification: `local-swagger.md`.
 
 Tests for the sidecar live under `local/openapi/{App}.OpenApiExamples.UnitTests`.
 
@@ -122,7 +124,9 @@ aspire ps --format Json                   # resources + dashboardUrl (contains a
 aspire logs <resource>                    # logs of db-init, openbao-init, api
 ```
 
-The dashboard link contains a personal login token. Do not commit it, paste it into a report or share it.
+The API listens on `https://localhost:5001`; the OpenAPI document is `/openapi/v1.json`. The only Swagger UI
+is the `swagger` resource in the dashboard. The dashboard link contains a personal login token. Do not commit
+it, paste it into a report or share it.
 
 ## Health, telemetry and CORS
 
@@ -174,3 +178,5 @@ The dashboard link contains a personal login token. Do not commit it, paste it i
 | `Blocked outbound HTTP call to ...` | Point the dependency to a local substitute; do not relax the handler |
 | `JwtBearer scheme '…' would download metadata` | Clear `Authority`/`MetadataAddress` through `JwtTrust` (`TrustValue.Empty`) |
 | Swagger profile picker returns 401 | The sidecar and API disagree on issuer/audience/key; check `devtoken.json` and the AppHost environment |
+| Swagger resource returns `500` with problems | `examples.json` references an operation, response or parameter the document does not have; read `aspire logs swagger` |
+| `swagger` resource is missing | The AppHost is in a test mode; the sidecar is added only in Local mode |

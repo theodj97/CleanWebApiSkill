@@ -1,16 +1,16 @@
 ---
 name: clean-webapi
 description: >-
-  Works on ASP.NET Core 10 repositories generated from the Clean Web API Template: Clean Architecture layers
+  Works on ASP.NET Core 10 repositories from the Clean Web API Template: Clean Architecture layers
   (Api, Application, Domain, Infrastructure, ServiceDefaults), Minimal API route groups, FluentValidation inputs
   and handlers, Result/Error, ADO.NET/Npgsql repositories, PostgreSQL schema scripts, OpenBao secrets, JWT
-  modes, role policies and owner scoping, Native AOT, Aspire local development, and the
-  unit/component/functional/architecture test suite. Use when adding or changing a feature, endpoint, validation
-  rule, SQL table or seed row, configuration key, secret, authorization policy or test; when choosing where code
-  belongs or naming a type; when fixing an IL2xxx/IL3xxx AOT warning; when reviewing a diff against the
-  repository conventions; when explaining the architecture or the test suite; or when removing the sample Todo
-  feature. Also for "add a feature", "add an endpoint", "add a test", "change the schema", "add a role", "why
-  does this build fail with IL2026", and "review this change".
+  modes, role policies and owner scoping, Native AOT, Aspire local development with local Swagger examples,
+  and the unit/component/functional/architecture test suite. Use when adding or changing a feature, endpoint,
+  validation rule, SQL table or seed row, configuration key, secret, authorization policy or test; when choosing
+  where code belongs or naming a type; when fixing an IL2xxx/IL3xxx AOT warning; when reviewing a diff against
+  the repository conventions; when explaining the architecture or the test suite; or when removing the sample
+  Todo feature. Also for "add a feature", "add an endpoint", "add a test", "change the schema", "add a role",
+  "IL2026 build failure", and "review this change".
 ---
 
 # Clean Web API: architecture, conventions and tests
@@ -50,6 +50,12 @@ on it: every pattern this skill needs is reproduced in `assets/examples/` as a s
 8. **A change is done only when the gates are green.** Build with zero warnings, Native AOT publish with zero
    warnings, format, analyzers, every test and the coverage thresholds. A green build is not a green AOT
    publish. → `references/quality-gates.md`
+9. **Every new endpoint is documented and locally runnable.** It appears in the API's `/openapi/v1.json`
+   with its operation id, summary, description, success and error status codes and schema; its contracts
+   are in `AppJsonSerializerContext` and `{Feature}OpenApiSchemas`; and `local/openapi/examples.json` has an
+   executable example, with test data that matches the seed and a profile from `users.json`, ready to run in
+   Swagger after `aspire start`. An endpoint without its document and example is not done.
+   → `references/local-swagger.md`
 
 ## Mode
 
@@ -58,12 +64,13 @@ Read the user's request and use the first row that matches. When two rows apply,
 | Request | Mode | Read |
 |---|---|---|
 | Add or change a feature; "add a CRUD for X"; a change that crosses layers | **Feature** (default) | `references/feature-slice.md`, then `references/architecture.md` |
-| Add or change one endpoint, status code, request or response | **Endpoint** | `references/api.md`, `references/feature-slice.md` |
+| Add or change one endpoint, status code, request or response | **Endpoint** | `references/api.md`, `references/feature-slice.md`, `references/local-swagger.md` |
 | Add, fix or refactor tests; "what does this test do"; coverage | **Test** | `references/testing.md` |
 | Add a table, column, index, seed row, query or sort key | **Schema** | `references/persistence.md`, `references/feature-slice.md` § 4 |
 | Add or change a setting, secret, connection string or OpenBao path | **Config** | `references/configuration-and-secrets.md` |
 | Add a role, policy, claim or ownership rule | **Auth** | `references/security.md` |
 | Start, stop, debug or extend the local environment | **Aspire** | `references/aspire.md`; use `aspire` for setup/repair and `aspire-orchestration` for start/stop |
+| Run locally, verify endpoints in Swagger, or add/fix local OpenAPI examples | **Local Swagger** | `references/local-swagger.md`, `references/aspire.md` |
 | An `IL2xxx`/`IL3xxx` warning or an AOT publish failure | **AOT** | `references/native-aot.md` |
 | Review a diff or the working tree | **Review** | `references/review-checklist.md`; use `code-review` for the full two-axis review |
 | Explain the architecture, a pattern, a name or the test suite | **Explain** | `references/architecture.md`, `references/conventions.md`, `references/glossary.md`, `references/testing.md`, `references/test-catalog.md` |
@@ -72,10 +79,11 @@ Read the user's request and use the first row that matches. When two rows apply,
 
 ## Main flow
 
-The flow applies to **Feature**. **Endpoint**, **Schema**, **Config**, **Auth**, **Aspire** and **AOT** run the
-phases their reference names and still end with Phase 8 (gates). **Test**, **Review**, **Explain**, **Remove
-sample** and **Debug** follow their reference's completion criteria and run the gates only when they change
-files. Read `AGENTS.md` and the repository README first; they win over this skill when they differ.
+The flow applies to **Feature**. **Endpoint**, **Schema**, **Config**, **Auth**, **Aspire**, **Local Swagger**
+and **AOT** run the phases their reference names and still end with Phase 8 (gates). **Test**, **Review**,
+**Explain**, **Remove sample** and **Debug** follow their reference's completion criteria and run the gates
+only when they change files. Read `AGENTS.md` and the repository README first; they win over this skill when
+they differ.
 
 ### Phase 0 — Read the repository
 
@@ -89,8 +97,9 @@ will touch, without editing anything.
 ### Phase 1 — Plan
 
 Produce a short plan: endpoints and status codes, types per layer, schema and seed changes, registrations,
-tests per project and docs. Present it and **wait for confirmation** when the change adds a table, a secret,
-a policy, a project, or touches more than one layer in a way that changes the contract. Otherwise continue.
+local Swagger examples, tests per project and docs. Present it and **wait for confirmation** when the change
+adds a table, a secret, a policy, a project, or touches more than one layer in a way that changes the contract.
+Otherwise continue.
 
 **Done when** every file in the plan has a named owner layer and the plan names the test that proves each
 behaviour.
@@ -133,15 +142,19 @@ add the request/response types to `AppJsonSerializerContext` and the schema desc
 descriptors.
 
 **Done when** every endpoint returns the documented status codes, every contract type is in the JSON context,
-and the OpenAPI document names every operation and response.
+the OpenAPI document names every operation and response, the feature tag is registered, and
+`OpenApiContractTests` includes the new operation ids and status codes.
 
 ### Phase 6 — Local environment
 
-Add the seed rows, the OpenAPI examples, any devtoken profile or role, and any AppHost resource the feature
-needs. A new table normally needs no AppHost change: `db-init` applies every `*.sql` script in order.
+Add the seed rows, the OpenAPI examples (`local/openapi/examples.json`, `bodies/`, `responses/`), any devtoken
+profile or role, and any AppHost resource the feature needs. Every new operation needs an executable example
+that matches the seed; `references/local-swagger.md` has the catalog contract and the example matrix. A new
+table normally needs no AppHost change: `db-init` applies every `*.sql` script in order.
 
-**Done when** the seed covers every state the endpoints accept, the profile picker can call every example,
-and `aspire start` rebuilds the schema and seed from scratch.
+**Done when** the seed covers every state the endpoints accept, every new operation has an executable example
+for its documented profile, the sidecar merges the catalog without problems, and `aspire start` rebuilds the
+schema and seed from scratch.
 
 ### Phase 7 — Tests
 
@@ -168,8 +181,13 @@ npm run coverage
 On Windows use `win-x64` for the publish. If Docker is unavailable, say exactly which test projects could
 not run; never claim they passed.
 
-**Done when** build and AOT publish report zero warnings, every test passes, and every coverage threshold is
-met. A warning is a failure (`TreatWarningsAsErrors`).
+For an endpoint, OpenAPI or local-example change, also run the **Local Swagger check** in
+`references/quality-gates.md` (`aspire start`, `swagger` resource, each new example with its profile) and
+report it separately. If it could not run, name the reason.
+
+**Done when** build and AOT publish report zero warnings, every test passes, every coverage threshold is
+met, and the local Swagger check ran or is reported as not run. A warning is a failure
+(`TreatWarningsAsErrors`).
 
 ### Phase 9 — Report
 
@@ -190,6 +208,7 @@ at the end of this file.
 | `references/testing.md` | What each test project covers, fixtures, attributes, builders, resets, coverage thresholds |
 | `references/test-catalog.md` | What each existing test class protects, and which suite to run for each kind of change |
 | `references/aspire.md` | AppHost topology, modes, `db-init`, `openbao-init`, Swagger sidecar, devtoken, dashboard |
+| `references/local-swagger.md` | Local run loop, sidecar wiring, examples catalog, mandatory endpoint examples, Swagger verification and troubleshooting |
 | `references/native-aot.md` | AOT properties, banned APIs, source-generated JSON, common warnings and fixes, publish gate |
 | `references/quality-gates.md` | Commands, format, analyzers, tests, coverage, hooks, commit convention, troubleshooting |
 | `references/review-checklist.md` | A diff review rubric with hard rules and failure signals |
@@ -238,6 +257,7 @@ Endpoints, status codes, validation, ownership and schema changes. Mention any c
 
 ## Gates
 Build: ... | AOT publish: ... | Tests: ... | Coverage: ... | Verify: ...
+Local Swagger: ... (or "not run: <reason>")
 
 ## Follow-ups
 Anything not done, not run, or deliberately left out (with the reason).

@@ -123,7 +123,8 @@ calls a login endpoint. The applications receive only validation material throug
 
 - `dotnet local/tools/devtoken.cs init` creates the HS256 key in the AppHost user secrets.
 - `devtoken list` shows profiles; `devtoken get --profile user` prints a token on stdout.
-- The local Swagger sidecar mints the same tokens for its profile picker from `local/openapi/users.json`.
+- The local Swagger sidecar mints the same tokens for its profile picker from `local/openapi/users.json`;
+  see `local-swagger.md`.
 - The issuer/audience come from `appsettings.json` and the AppHost, not from the token.
 - Never commit a token or key; never paste one into a report. The dashboard URL contains a login token: do not
   share it.

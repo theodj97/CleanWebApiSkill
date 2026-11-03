@@ -4,7 +4,7 @@
     {
       "id": 1,
       "prompt": "Add a Project feature with create, get by id and filter to this repository. A project has a name unique per owner, a description and a status (Draft, Active, Completed, Archived). Only the owner can read it; admins can read every project. Add the SQL, the seed, the local Swagger examples and the tests. Finish with the repository gates.",
-      "expected_output": "A complete vertical slice: Domain entity/enum/constraints; Application input/validator/port/filter/ProjectSortCatalog/DTO/handler with ValidatorSet; Infrastructure ProjectTable/ProjectSortColumns/ADO.NET repository; SQL schema + seed; API request/response/ProjectEndpoints/route group with explicit ValidatorSet and handler registrations plus JSON/OpenAPI entries; unit, component, functional and architecture tests, including sort alignment; README update; build, AOT publish, test and coverage results reported. The agent presents a plan first because the change adds a table and crosses layers.",
+      "expected_output": "A complete vertical slice: Domain entity/enum/constraints; Application input/validator/port/filter/ProjectSortCatalog/DTO/handler with ValidatorSet; Infrastructure ProjectTable/ProjectSortColumns/ADO.NET repository; SQL schema + seed; API request/response/ProjectEndpoints/route group with explicit ValidatorSet and handler registrations plus JSON/OpenAPI entries; local Swagger examples with seed-consistent bodies, parameters and responses; unit, component, functional and architecture tests, including sort alignment; README update; build, AOT publish, test and coverage results reported, plus the local Swagger check or the reason it could not run. The agent presents a plan first because the change adds a table and crosses layers.",
       "files": [],
       "expectations": [
         "The plan names every layer and the files it will touch before editing, and waits for confirmation because a table is added",
@@ -16,6 +16,8 @@
         "ProjectSortCatalog is the single accepted-key list; ProjectSortColumns maps it; ProjectSortColumnsTests asserts the two sets are equal",
         "The SQL script creates the table with Id bytea, timestamptz audit columns and UX_Project_CreatedBy_Name; the seed uses the devtoken emails and covers every status",
         "The API registers the validators, one ValidatorSet<TInput> per input, the handlers and the repository explicitly; adds ProjectRoutes to IGroupMap; adds the request/response/collection types to AppJsonSerializerContext; adds ProjectOpenApiSchemas to OpenApiConfiguration",
+        "local/openapi/examples.json has an entry for every Project operation, with bodies and responses that match the seed and users.json; route parameters use the array form",
+        "The agent ran the local Swagger check (aspire start, the swagger resource, each documented profile) or reported exactly why it could not",
         "Create uses currentUser.Owner.OwnerForCreate; get and filter use currentUser.Owner.VisibleOwner or FilterOwners; no owner comes from the request body",
         "The endpoint plumbing lives in ProjectEndpoints; ProjectRoutes keeps templates and metadata and does not inject ICurrentUser",
         "Tests include validator tests, handler tests with ValidatorSet and NSubstitute, a sort-alignment test, component tests (201/400/409/200/204), an authorization matrix (401/403/2xx), a functional flow and an architecture assertion for the port/filter location",
@@ -53,6 +55,7 @@
         "If Priority is sortable, TodoSortCatalog and TodoSortColumns both include it and TodoSortColumnsTests passes",
         "The SQL default or seed covers every priority and does not violate a constraint",
         "The JSON context and the OpenAPI schema describe the new field, including the allowed values",
+        "The local Swagger request/response examples include the new field and remain consistent with the seed",
         "Unit tests cover the validator and handler; component tests cover create/read/update with the new field; the OpenAPI contract test asserts the schema",
         "The agent ran the build, the AOT publish, the tests and coverage and reported real results",
         "No reflection, dynamic, EF Core or Dapper was introduced"
@@ -119,6 +122,22 @@
         "README/local-development docs name the secret and its purpose without a value",
         "No secret value appears in the diff, appsettings, test output or the final report",
         "The agent ran the relevant tests and reported the real result"
+      ]
+    },
+    {
+      "id": 8,
+      "prompt": "Start the local environment and make every Todo endpoint testable in Swagger: the OpenAPI document must contain every operation, and the examples catalog must let me run each one with the right profile and seeded data. Fix any catalog or document mismatch you find. Report the exact commands, URLs and profiles.",
+      "expected_output": "A working local loop: the API document contains every Todo operation with its metadata and status codes; local/openapi/examples.json covers every operation with request bodies, parameter examples and success responses consistent with the seed and users.json; the sidecar merges the catalog without problems; and the agent reports the Aspire dashboard, the swagger resource, the profiles used and the result of each example. If Docker/Aspire is unavailable, the agent reports exactly what could not run and runs the sidecar/OpenAPI contract tests instead.",
+      "files": [],
+      "expectations": [
+        "The agent started the AppHost with the documented local flow (dotnet local/tools/devtoken.cs init if needed, aspire start)",
+        "The agent opened the swagger resource, not the API port, and named the profile used for each example",
+        "Every Todo operation in /openapi/v1.json has a matching examples.json entry with a body, parameter or response example as applicable",
+        "Route parameters use the parameters array with a seeded id; request/response values match the Local seed and users.json",
+        "The sidecar logs and the merged document show no catalog problems (no 500 caused by a mismatched operation, response or parameter)",
+        "The agent executed each example and reported the real status/body or the real failure",
+        "If the local check could not run, the agent reported the reason and did not claim it passed",
+        "The agent did not weaken OpenApiContractTests, the sidecar tests or the authorization configuration to make Swagger work"
       ]
     }
   ]

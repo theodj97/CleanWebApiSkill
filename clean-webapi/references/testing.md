@@ -287,5 +287,7 @@ npm run coverage
 - [ ] Functional test covers the end-to-end journey when the feature spans endpoints.
 - [ ] Architecture test asserts the new port/filter/repository location.
 - [ ] OpenAPI contract test includes the new operation ids and status codes.
+- [ ] `local/openapi/examples.json` has an executable example for every new operation, and the local Swagger
+      check ran (or is reported as not run).
 - [ ] Tests use `[ResetDatabase]`, `[AuthenticatedAs]`, `TestData`, builders and `Eventually`.
 - [ ] One new test was shown to fail without the change, then pass with it.
