@@ -1,8 +1,8 @@
-using {App}.Application.Project.Queries;
+using {App}.Application.Project.Handlers.Queries;
 using {App}.Application.Results;
 using {App}.Domain.Models.Entities;
 
-namespace {App}.Application.Project.Abstractions;
+namespace {App}.Application.Abstractions.Repositories;
 
 public interface IProjectRepository
 {

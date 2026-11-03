@@ -1,6 +1,6 @@
 using FluentValidation;
 
-namespace {App}.Application.Project.Create;
+namespace {App}.Application.Project.Handlers.Create;
 
 public class CreateProjectInputValidator : ProjectValidator<CreateProjectInput>
 {

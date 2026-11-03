@@ -59,23 +59,29 @@ public interface ICurrentUser
 {
     string Email { get; }
     bool IsAdmin { get; }
-    string? OwnerScope { get; }
+    OwnerScope Owner { get; }
 }
 ```
 
-`HttpContextCurrentUser` (Api) reads the claims. `OwnerScope` is `null` for admins and `Email` for everyone
-else.
+`OwnerScope` is a value type in `Application/Abstractions/Identity`. `HttpContextCurrentUser` (Api) reads the
+claims and builds it with `new(Email, IsAdmin)`. The rule lives in the value type, not in the HTTP mappers:
+
+- `VisibleOwner`: `null` for admins (every owner), the caller email for everyone else (read/filter/delete).
+- `OwnerForCreate`: the caller email for everyone, including admins.
+- `FilterOwners(requested)`: the requested owners for admins, `[caller]` for everyone else.
 
 Rules:
 
-- The owner filter passed to a repository is `currentUser.OwnerScope`, never a body/query value.
-- An admin-only `createdBy` filter is allowed only when `OwnerScope` is `null`; non-admins are forced to their
-  own email in `ToInput`.
+- The owner filter passed to a repository is `currentUser.Owner.VisibleOwner` or
+  `currentUser.Owner.FilterOwners(requested)`, never a raw body/query value.
+- An admin-only `createdBy` filter is allowed only when `Owner.IsAdmin`; non-admins are pinned to their own
+  email in `ToInput`.
 - A non-admin reading/updating/deleting another owner's row gets the same answer as a missing row (`404` or a
   `false`/empty result), not a `403` that confirms the row exists.
 - The stored row's `CreatedBy` is the owner for update-time uniqueness checks; an admin updating another user's
   row checks against that user's names/titles.
-- Audit fields (`CreatedBy`, `UpdatedBy`) come from the token (`Email`), not from the request.
+- Audit fields (`CreatedBy`, `UpdatedBy`) come from the token (`Owner.Email`), not from the request.
+- `OwnerScopeTests` covers the three methods; `HttpContextCurrentUserTests` covers the claim adapter.
 
 ## Adding a role or policy
 
@@ -129,7 +135,7 @@ calls a login endpoint. The applications receive only validation material throug
 | 401 on every authenticated test | Trust mapping (issuer/audience/key) or claim types differ from what the app validates. Check `TestAuthSettings` and `AppHostContract.JwtTrust`. |
 | 403 where success was expected | Token accepted; role or claim type/value does not match the policy, or the email claim is missing. |
 | 200 where 403 was expected | The route group uses a broader policy, or the endpoint is not in the group. |
-| A user sees another owner's row | `OwnerScope` was not passed to the repository, or the repository ignored `createdBy`. |
-| Admin cannot see other owners | `OwnerScope` is `null` and the admin `createdBy` filter is dropped; check `ToInput`. |
+| A user sees another owner's row | `Owner.VisibleOwner` was not passed to the repository, or the repository ignored `createdBy`. |
+| Admin cannot see other owners | `Owner.VisibleOwner` is `null` and the admin `createdBy` filter is dropped; check `ToInput` and `FilterOwners`. |
 | `JwtBearer scheme '…' would download metadata` | `Authority`/`MetadataAddress` not cleared in the test mapping. |
 | Local tokens rejected after a restart | The key was rotated; restart the AppHost and select a profile again (`devtoken init --rotate` changes it). |

@@ -1,3 +1,10 @@
+using System.Text.Json.Nodes;
+using {App}.Api.Models.Responses.Project;
+using {App}.Api.Routes.Project.Create;
+using {App}.Api.Routes.Project.Filter;
+using {App}.Application.Project.Sorting;
+using {App}.Domain.Models.Enums.Project;
+using {App}.Domain.Models.Project;
 using Microsoft.OpenApi;
 using static {App}.Api.Configuration.OpenApiSchemaHelpers;
 
@@ -11,19 +18,19 @@ internal static class ProjectOpenApiSchemas
         if (document.Components?.Schemas is not { } schemas)
             return;
 
-        Patch(schemas, "CreateProjectRequest", schema =>
+        Patch(schemas, nameof(CreateProjectRequest), schema =>
         {
             Describe(Property(schema, "name"),
                      "Project name. Trimmed; unique per owner.",
-                     maxLength: 120,
+                     maxLength: ProjectConstraints.NameMaxLength,
                      example: "Release 1.0");
             Describe(Property(schema, "description"),
                      "Optional details for the project.",
-                     maxLength: 1000,
+                     maxLength: ProjectConstraints.DescriptionMaxLength,
                      example: "Ship the first public release.");
         });
 
-        Patch(schemas, "FilteredProjectRequest", schema =>
+        Patch(schemas, nameof(FilteredProjectRequest), schema =>
         {
             Describe(ArrayItems(Property(schema, "ids")),
                      "Project ids to include.",
@@ -31,11 +38,10 @@ internal static class ProjectOpenApiSchemas
                      example: "01HWXHRB80000G000000000001");
             Describe(ArrayItems(Property(schema, "names")),
                      "Name fragments to match (contains).",
-                     maxLength: 120,
+                     maxLength: ProjectConstraints.NameMaxLength,
                      example: "release");
-            DescribeStatus(ArrayItems(Property(schema, "statuses")),
-                           "Statuses to include: 1 Draft, 2 Active, 3 Completed, 4 Archived.",
-                           withAllowedValues: true);
+            DescribeProjectStatus(ArrayItems(Property(schema, "statuses")),
+                                  "Statuses to include.");
             Describe(ArrayItems(Property(schema, "createdBys")),
                      "Owner emails. Admin only; other roles are always scoped to their own email.",
                      format: "email",
@@ -54,13 +60,13 @@ internal static class ProjectOpenApiSchemas
             DescribeSort(sort);
             if (sort is not null)
             {
+                // DescribeSort carries the Todo catalog; the Project feature owns its own vocabulary.
                 sort.Description =
-                    "Sort keys and directions, applied in order. Supported keys: id, name, description, "
-                    + "createdAt, updatedAt, status, createdBy, updatedBy.";
+                    $"Sort keys and directions, applied in order. Supported keys: {ProjectSortCatalog.Describe()}.";
             }
         });
 
-        Patch(schemas, "ProjectResponse", schema =>
+        Patch(schemas, nameof(ProjectResponse), schema =>
         {
             Describe(Property(schema, "id"),
                      "Project identifier.",
@@ -68,19 +74,17 @@ internal static class ProjectOpenApiSchemas
                      example: "01HWXHRB80000G000000000001");
             Describe(Property(schema, "name"),
                      "Project name.",
-                     maxLength: 120,
+                     maxLength: ProjectConstraints.NameMaxLength,
                      example: "Release 1.0");
             Describe(Property(schema, "description"),
                      "Project details.",
-                     maxLength: 1000,
+                     maxLength: ProjectConstraints.DescriptionMaxLength,
                      example: "Ship the first public release.");
             Describe(Property(schema, "createdAt"),
                      "Creation timestamp (UTC).",
                      format: "date-time",
                      example: "2026-10-26T09:15:00Z");
-            DescribeStatus(Property(schema, "status"),
-                           "Status: 1 Draft, 2 Active, 3 Completed, 4 Archived.",
-                           withAllowedValues: true);
+            DescribeProjectStatus(Property(schema, "status"));
             Describe(Property(schema, "createdBy"),
                      "Owner email.",
                      format: "email",
@@ -90,5 +94,21 @@ internal static class ProjectOpenApiSchemas
                      format: "email",
                      example: "local.user@example.com");
         });
+    }
+
+    /// <summary>
+    /// The shared DescribeStatus derives its values from ETodoStatus. Project has the same numeric
+    /// values but its own names, so this feature sets the description and the enum from EProjectStatus.
+    /// </summary>
+    private static void DescribeProjectStatus(OpenApiSchema? schema, string? description = null)
+    {
+        if (schema is null)
+            return;
+
+        string values = string.Join(", ", Enum.GetValues<EProjectStatus>()
+                                                    .Select(status => $"{(int)status} {status}"));
+        schema.Description = description is null ? $"Status: {values}." : $"{description} Values: {values}.";
+        schema.Example = JsonValue.Create((int)EProjectStatus.Draft);
+        schema.Enum = [.. Enum.GetValues<EProjectStatus>().Select(status => JsonValue.Create((int)status))];
     }
 }

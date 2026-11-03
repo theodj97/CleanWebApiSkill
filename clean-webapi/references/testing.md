@@ -8,7 +8,7 @@ suite, see `test-catalog.md`.
 
 | Project | Question it answers | Infrastructure | Docker | Parallel |
 |---|---|---|---|---|
-| `{App}.Api.UnitTests` | Does this pure logic/validator/service make the right decision? | Substitutes (NSubstitute); no ASP.NET host | No | Yes |
+| `{App}.Api.UnitTests` | Does this pure logic/validator/handler make the right decision? | Substitutes (NSubstitute); no ASP.NET host | No | Yes |
 | `{App}.Api.ComponentTests` | Does the API behave correctly through the full ASP.NET pipeline and the real database? | `WebApplicationFactory<Program>` in-process + shared AppHost (PostgreSQL, OpenBao) | Yes | No (shared database) |
 | `{App}.Api.FunctionalTests` | Does a complete user journey work through real HTTP against a separately running process? | Shared AppHost in `Functional` mode; HTTP only, no service access | Yes | No (shared database) |
 | `{App}.ArchitectureTests` | Do the dependency and structure rules still hold? | ArchUnitNET over the built assemblies | No | Yes |
@@ -22,8 +22,11 @@ Tests for `local/openapi/` live under `local/openapi/`, next to the sidecar. Tes
 Use for:
 
 - validators: required, empty/whitespace, max length, email, ULID, date range, status, paging, sort keys;
-- services with a substituted port: uniqueness, not-found, conflict propagation, trimming, audit fields,
+- handlers with a substituted port: uniqueness, not-found, conflict propagation, trimming, audit fields,
   patch/no-op behaviour;
+- `ValidatorSet<T>`: an empty set throws; validators aggregate their failures;
+- `OwnerScope`: `VisibleOwner`, `OwnerForCreate` and `FilterOwners` for admins and non-admins;
+- sort alignment: `{Feature}SortCatalog.KeySet` equals `{Feature}SortColumns.Map.Keys`;
 - `Result<T>`/`Error` behaviour;
 - pure helpers (`TodoTable`, OpenAPI schema helpers, configuration validation, secrets client with a fake
   handler);
@@ -32,27 +35,29 @@ Use for:
 Pattern:
 
 ```csharp
-public class CreateProjectServiceTests
+public class CreateProjectHandlerTests
 {
     private const string Owner = "user@example.com";
     private readonly IProjectRepository _repository = Substitute.For<IProjectRepository>();
-    private readonly CreateProjectService _service;
+    private readonly CreateProjectHandler _handler;
 
-    public CreateProjectServiceTests()
+    public CreateProjectHandlerTests()
     {
         _repository.NameExistsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
                    .Returns(false);
-        _service = new CreateProjectService(_repository, []);
+        _handler = new CreateProjectHandler(
+            _repository,
+            new ValidatorSet<CreateProjectInput>([new CreateProjectInputValidator()]));
     }
 
     [Fact]
-    public async Task CreateAsync_WithNameAlreadyUsedByOwner_ReturnsConflictWithoutInserting()
+    public async Task HandleAsync_WithNameAlreadyUsedByOwner_ReturnsConflictWithoutInserting()
     {
         // Arrange
         _repository.NameExistsAsync("Taken", Owner, Arg.Any<CancellationToken>()).Returns(true);
 
         // Act
-        Result<ProjectDto?> result = await _service.CreateAsync(
+        Result<ProjectDto?> result = await _handler.HandleAsync(
             new CreateProjectInput { Name = "Taken", CreatedBy = Owner },
             TestContext.Current.CancellationToken);
 
@@ -69,7 +74,9 @@ Rules:
 - Pass `TestContext.Current.CancellationToken` (or the test's `CancellationToken` in component/functional
   tests).
 - Do not mock the type under test; substitute the ports.
-- A service test with no validators passes `[]`; the service's `ExecuteAsync` then just runs the action.
+- Build the handler with a real `ValidatorSet<TInput>` (usually the feature's validator). An empty set is a
+  composition error and throws by design; do not use `[]` to skip validation.
+- Cover the `ValidatorSet` failure path directly (empty set, failing validator) in a dedicated test.
 - Do not use a database, a container or an `HttpClient` here.
 
 ## Component tests
@@ -171,7 +178,9 @@ Rules:
 
 **Known limitation:** the template's `StructureTests` assertion hardcodes
 `Infrastructure.Repositories.Todo.Helpers`. Adding a second feature's helpers makes it fail
-(`ProjectSortColumns is not a repository or a repository helper`). Generalize the condition in the same change:
+(`ProjectSortColumns is not a repository or a repository helper`). The `ProjectSortCatalog` lives in
+Application, so it is not affected by this condition; only the Infrastructure `ProjectSortColumns` is.
+Generalize the condition in the same change:
 
 ```csharp
 || type.Namespace!.Contains(".Helpers", StringComparison.Ordinal),
@@ -268,7 +277,10 @@ npm run coverage
 ## Checklist
 
 - [ ] Validator tests cover every rule and the null/empty edge cases.
-- [ ] Service tests cover success, each business failure and propagation from the port.
+- [ ] `ValidatorSet` tests cover the empty-set failure and aggregated violations.
+- [ ] `OwnerScope` tests cover admin and non-admin `VisibleOwner`/`OwnerForCreate`/`FilterOwners`.
+- [ ] `{Feature}SortCatalog` and `{Feature}SortColumns` alignment is tested.
+- [ ] Handler tests cover success, each business failure and propagation from the port.
 - [ ] Component tests cover success, 400, 404/204, 409, persistence and ProblemDetails.
 - [ ] Authorization matrix covers every new protected route and every role.
 - [ ] Ownership tests cover non-admin vs admin and another owner.

@@ -116,7 +116,8 @@ descriptor to keep reflection working is a red flag: replace the reflection inst
 
 - [ ] No new `System.Reflection`, `dynamic`, reflection JSON or reflection OpenAPI.
 - [ ] Every new contract type is in `AppJsonSerializerContext`.
-- [ ] Every new service/validator/repository is registered explicitly.
+- [ ] Every new handler, validator, `ValidatorSet<T>` and repository is registered explicitly; `ValidateOnBuild`
+      catches an empty set at startup.
 - [ ] No `RequiresDynamicCode`, `RequiresUnreferencedCode` or `UnconditionalSuppressMessage` added.
 - [ ] New packages checked for AOT compatibility.
 - [ ] `dotnet build` passes with zero warnings.

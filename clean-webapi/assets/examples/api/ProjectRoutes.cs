@@ -1,22 +1,13 @@
 using System.Net;
 using {App}.Api.Common.Abstractions;
 using {App}.Api.Configuration;
-using {App}.Api.Extensions;
 using {App}.Api.Models.Interfaces;
 using {App}.Api.Models.Responses.Project;
-using {App}.Api.Routes.Project.Create;
-using {App}.Api.Routes.Project.Filter;
-using {App}.Application.Abstractions;
-using {App}.Application.Dtos.Project;
-using {App}.Application.Project.Create;
-using {App}.Application.Project.Filtered;
-using {App}.Application.Project.GetById;
-using {App}.Application.Results;
 using Microsoft.OpenApi;
 
 namespace {App}.Api.Routes.Project;
 
-public sealed class ProjectRoutes(ICurrentUser currentUser) : IGroupMap
+public sealed class ProjectRoutes : IGroupMap
 {
     private const string RouteName = "Project";
 
@@ -28,14 +19,7 @@ public sealed class ProjectRoutes(ICurrentUser currentUser) : IGroupMap
 
         DescribeIdParameter(userGroup);
 
-        userGroup.MapGet("/{id}", async (string id,
-                                         IGetProjectByIdService service,
-                                         CancellationToken cancellationToken) =>
-        {
-            GetProjectByIdInput input = new() { Id = id, CreatedBy = currentUser.OwnerScope };
-            Result<ProjectDto?> result = await service.GetAsync(input, cancellationToken);
-            return result.ToResponse<ProjectDto?, ProjectResponse>();
-        })
+        userGroup.MapGet("/{id}", ProjectEndpoints.GetByIdAsync)
         .WithName("GetProjectById")
         .WithSummary("Get a project by id")
         .WithDescription(
@@ -45,14 +29,7 @@ public sealed class ProjectRoutes(ICurrentUser currentUser) : IGroupMap
         .Produces<ProjectResponse>((int)HttpStatusCode.OK)
         .Produces((int)HttpStatusCode.NoContent, typeof(void));
 
-        userGroup.MapPost("/filter", async (FilteredProjectRequest request,
-                                            IFilteredProjectService service,
-                                            CancellationToken cancellationToken) =>
-        {
-            var input = request.ToInput(currentUser.OwnerScope);
-            var result = await service.FilterAsync(input, cancellationToken);
-            return result.ToResponse<ProjectDto?, ProjectResponse>();
-        })
+        userGroup.MapPost("/filter", ProjectEndpoints.FilterAsync)
         .WithName("FilterProjects")
         .WithSummary("Filter projects")
         .WithDescription(
@@ -62,14 +39,7 @@ public sealed class ProjectRoutes(ICurrentUser currentUser) : IGroupMap
         .Produces<IEnumerable<ProjectResponse>>((int)HttpStatusCode.OK)
         .Produces((int)HttpStatusCode.NoContent, typeof(void));
 
-        userGroup.MapPost("/", async (CreateProjectRequest request,
-                                      ICreateProjectService service,
-                                      CancellationToken cancellationToken) =>
-        {
-            var input = request.ToInput(currentUser.Email);
-            var result = await service.CreateAsync(input, cancellationToken);
-            return result.ToCreatedResponse<ProjectDto?, ProjectResponse>(dto => $"/api/Project/{dto!.Id}");
-        })
+        userGroup.MapPost("/", ProjectEndpoints.CreateAsync)
         .WithName("CreateProject")
         .WithSummary("Create a project")
         .WithDescription(

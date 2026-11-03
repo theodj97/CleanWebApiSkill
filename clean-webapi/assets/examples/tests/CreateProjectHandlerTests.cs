@@ -1,7 +1,8 @@
+using {App}.Application.Abstractions.Repositories;
 using {App}.Application.Dtos.Project;
-using {App}.Application.Project.Abstractions;
-using {App}.Application.Project.Create;
+using {App}.Application.Project.Handlers.Create;
 using {App}.Application.Results;
+using {App}.Application.Validation;
 using {App}.Domain.Models.Entities;
 using {App}.Domain.Models.Enums.Project;
 using NSubstitute;
@@ -9,32 +10,34 @@ using NSubstitute;
 namespace {App}.Api.UnitTests.Application.Project;
 
 /// <summary>
-/// Create service coverage with a substituted repository: name uniqueness is a business rule
+/// Create handler coverage with a substituted repository: name uniqueness is a business rule
 /// reported as a conflict, and repository failures are propagated instead of thrown.
 /// </summary>
-public class CreateProjectServiceTests
+public class CreateProjectHandlerTests
 {
     private const string Owner = "user@example.com";
 
     private readonly IProjectRepository _repository = Substitute.For<IProjectRepository>();
-    private readonly CreateProjectService _service;
+    private readonly CreateProjectHandler _handler;
 
-    public CreateProjectServiceTests()
+    public CreateProjectHandlerTests()
     {
         _repository.NameExistsAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<Ulid?>(), Arg.Any<CancellationToken>())
                    .Returns(false);
-        _service = new CreateProjectService(_repository, []);
+        _handler = new CreateProjectHandler(
+            _repository,
+            new ValidatorSet<CreateProjectInput>([new CreateProjectInputValidator()]));
     }
 
     [Fact]
-    public async Task CreateAsync_WithNameAlreadyUsedByOwner_ReturnsConflictWithoutInserting()
+    public async Task HandleAsync_WithNameAlreadyUsedByOwner_ReturnsConflictWithoutInserting()
     {
         // Arrange
         _repository.NameExistsAsync("Taken", Owner, Arg.Any<Ulid?>(), Arg.Any<CancellationToken>())
                    .Returns(true);
 
         // Act
-        Result<ProjectDto?> result = await _service.CreateAsync(
+        Result<ProjectDto?> result = await _handler.HandleAsync(
             new CreateProjectInput { Name = "Taken", CreatedBy = Owner },
             TestContext.Current.CancellationToken);
 
@@ -45,7 +48,7 @@ public class CreateProjectServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_WithNameUsedByAnotherOwner_Inserts()
+    public async Task HandleAsync_WithNameUsedByAnotherOwner_Inserts()
     {
         // Arrange
         _repository.NameExistsAsync("Taken", "other@example.com", Arg.Any<Ulid?>(), Arg.Any<CancellationToken>())
@@ -54,7 +57,7 @@ public class CreateProjectServiceTests
                    .Returns(call => Result<ProjectEntity>.Success(call.Arg<ProjectEntity>()));
 
         // Act
-        Result<ProjectDto?> result = await _service.CreateAsync(
+        Result<ProjectDto?> result = await _handler.HandleAsync(
             new CreateProjectInput { Name = "Taken", CreatedBy = Owner },
             TestContext.Current.CancellationToken);
 
@@ -64,14 +67,14 @@ public class CreateProjectServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_WhenRepositoryReportsDuplicate_PropagatesConflict()
+    public async Task HandleAsync_WhenRepositoryReportsDuplicate_PropagatesConflict()
     {
         // Arrange: the pre-check passed but a concurrent writer inserted the same name first.
         _repository.InsertAsync(Arg.Any<ProjectEntity>(), Arg.Any<CancellationToken>())
                    .Returns(Result<ProjectEntity>.Failure(new ConflictError("duplicate")));
 
         // Act
-        Result<ProjectDto?> result = await _service.CreateAsync(
+        Result<ProjectDto?> result = await _handler.HandleAsync(
             new CreateProjectInput { Name = "Taken", CreatedBy = Owner },
             TestContext.Current.CancellationToken);
 
@@ -81,14 +84,14 @@ public class CreateProjectServiceTests
     }
 
     [Fact]
-    public async Task CreateAsync_WithUniqueName_ReturnsDraftDto()
+    public async Task HandleAsync_WithUniqueName_ReturnsDraftDto()
     {
         // Arrange
         _repository.InsertAsync(Arg.Any<ProjectEntity>(), Arg.Any<CancellationToken>())
                    .Returns(call => Result<ProjectEntity>.Success(call.Arg<ProjectEntity>()));
 
         // Act
-        Result<ProjectDto?> result = await _service.CreateAsync(
+        Result<ProjectDto?> result = await _handler.HandleAsync(
             new CreateProjectInput { Name = "  Release 1.0  ", Description = "details", CreatedBy = Owner },
             TestContext.Current.CancellationToken);
 

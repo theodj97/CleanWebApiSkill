@@ -22,15 +22,6 @@ internal static class ProjectDtoExtensions
         };
     }
 
-    /// <summary>Maps a projection without filling unrelated DTO fields.</summary>
-    internal static ProjectDto ToNameDto(this ProjectEntity entity)
-    {
-        ArgumentNullException.ThrowIfNull(entity);
-
-        return new()
-        {
-            Id = entity.Id,
-            Name = entity.Name
-        };
-    }
+    // A partial read does not use a partially filled ProjectDto. Add a projection type in
+    // Application/{Feature}/Projections (for example ProjectTitle) and return it from the port.
 }

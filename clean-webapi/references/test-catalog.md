@@ -13,7 +13,8 @@ No Docker, no host. Run this project first; it is the fastest signal.
 | Class | What it proves |
 |---|---|
 | `EndpointRouteBuilderExtensionsTests` | The base group maps `/api/{name}` and documents 400/500; the authorized group adds the policy, 401/403 metadata, and requires authentication without a policy. |
-| `HttpContextCurrentUserTests` | `Email` reads the mapped and short email claims and throws without one; `OwnerScope` is null for Admin and the email for everyone else. |
+| `HttpContextCurrentUserTests` | `Email` reads the mapped and short email claims and throws without one; `Owner` builds an `OwnerScope` whose `VisibleOwner` is null for Admin and the email for everyone else. |
+| `OwnerScopeTests` | `VisibleOwner`, `OwnerForCreate` and `FilterOwners` for admins and non-admins. |
 
 ### Api / Configuration
 
@@ -23,14 +24,14 @@ No Docker, no host. Run this project first; it is the fastest signal.
 | `AuthenticationSettingsTests` | Symmetric vs Oidc inference, authority/mode combinations, key length, missing key, invalid authority, invalid mode, ignored `API_KEY` in Oidc. |
 | `ConstantsTests` | Every policy is listed once, the JWT scheme is listed, the configuration keys keep their expected values. |
 | `GlobalExceptionHandlerTests` | Null exception, 500 ProblemDetails, BadHttpRequestException, JsonException, null logger. |
-| `OpenApiSchemaTests` | Schema descriptors are no-ops without components/properties, describe Ulid/ProblemDetails/sort, and patch only existing schemas. |
+| `OpenApiSchemaTests` | Schema descriptors are no-ops without components/properties, describe Ulid/ProblemDetails/sort, derive status values from `ETodoStatus`, and patch only existing schemas. |
 
 ### Api / Extensions and Routes
 
 | Class | What it proves |
 |---|---|
-| `ApiResultExtensionsTests` | 200/201/204/collection/empty collection/scalar/empty string; each `Error` maps to its ProblemDetails/401/403; an unhandled error type throws. |
-| `FilteredTodoRequestTests` | `ToInput` forces the authenticated email for non-admins and keeps the requested owners for admins. |
+| `ApiResultExtensionsTests` | 200/201/204/collection/empty collection/scalar/empty string; each `Error` maps to its ProblemDetails/401/403; `traceId` is present; an unhandled error type throws. |
+| `FilteredTodoRequestTests` | `ToInput(OwnerScope)` forces the authenticated email for non-admins and keeps the requested owners for admins. |
 
 ### Application
 
@@ -39,10 +40,10 @@ No Docker, no host. Run this project first; it is the fastest signal.
 | `BaseAbstractValidatorTests` | `NotNullNotEmpty`, `ValidateUlid`, `ValidateDateTime`, date-range pairing/order, sort-key duplicates/unknown/case-insensitive, email parsing, explicit property name. |
 | `ErrorTests` | Each error record exposes the default or supplied title/description; 401/403 have none. |
 | `ResultTests` | Success/failure invariants: success with value/null, failure with error, invalid constructor states throw. |
-| `CreateTodoServiceTests` | Duplicate title per owner → `ConflictError` without inserting; same title for another owner inserts; repository conflict propagates; unique title returns the trimmed DTO. |
-| `UpdateTodoServiceTests` | Unknown id → `NotFoundError`; duplicate title → `ConflictError` without updating; repository conflict propagates; row disappears before update → `NotFoundError`; valid changes return the DTO. |
+| `CreateTodoHandlerTests` | Duplicate title per owner → `ConflictError` without inserting; same title for another owner inserts; repository conflict propagates; unique title returns the trimmed DTO. |
+| `UpdateTodoHandlerTests` | Unknown id → `NotFoundError`; duplicate title → `ConflictError` without updating; repository conflict propagates; row disappears before update → `NotFoundError`; valid changes return the DTO. |
 | `TodoValidatorTests` | Shared title/description/owner/status rules, including max lengths and registered enum values. |
-| `ValidationRunnerTests` | A service with no validators runs the action (the `ValidationService` path). |
+| `ValidatorSetTests` | An empty `ValidatorSet<T>` throws; a valid input passes; a failing validator returns `BadRequestError`. |
 | `CreateTodoInputValidatorTests` | Create input: valid, empty/whitespace/null title, overlong title, invalid email. |
 | `UpdateTodoInputValidatorTests` | Update input: valid no-op, invalid ULID, whitespace/overlong title, unregistered status. |
 
@@ -51,6 +52,7 @@ No Docker, no host. Run this project first; it is the fastest signal.
 | Class | What it proves |
 |---|---|
 | `TodoTableTests` | Table/column constants and constraints stay in sync. |
+| `TodoSortColumnsTests` | `TodoSortCatalog.KeySet` equals `TodoSortColumns.Map.Keys`; every catalog key resolves case-insensitively. |
 | `OpenBaoClientTests` | KV v2 read/write, token header, path, error messages never include the token, unexpected payloads throw, invalid options throw. |
 | `OpenBaoConfigurationTests` | No address → no-op; missing setting/invalid timeout → throw; complete config adds one source; every entry becomes a configuration key; server failure throws. |
 | `ExtensionsTests` | OTLP exporter only with an endpoint; `/health` and `/alive` are mapped in and out of Development. |
@@ -124,8 +126,10 @@ the database; `DatabaseResetConfiguration`/`RespawnDatabaseResetter` reset it; `
 
 | Change | Minimum suites |
 |---|---|
-| Validator or pure helper | Unit |
-| Service business rule | Unit + component (the HTTP/database path) |
+| Validator, `ValidatorSet` or pure helper | Unit |
+| Handler business rule | Unit + component (the HTTP/database path) |
+| Owner-scope rule | Unit (`OwnerScopeTests`) + component (ownership) |
+| Sort key or column map | Unit (`*SortColumnsTests`) + component (filtered sort) |
 | Endpoint contract or status code | Component + OpenAPI contract |
 | SQL, index, filter, sort, pagination | Component (repository/filtered tests) |
 | JWT/policy/ownership | Component (authentication/authorization/ownership) + functional (at least the 401/403/valid flow) |

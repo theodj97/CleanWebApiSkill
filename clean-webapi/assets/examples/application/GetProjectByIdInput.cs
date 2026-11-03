@@ -1,4 +1,4 @@
-namespace {App}.Application.Project.GetById;
+namespace {App}.Application.Project.Handlers.GetById;
 
 public sealed record GetProjectByIdInput
 {

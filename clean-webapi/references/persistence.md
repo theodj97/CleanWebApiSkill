@@ -51,7 +51,7 @@ CREATE INDEX IF NOT EXISTS "IX_Project_CreatedAt" ON "Project" ("CreatedAt");
 - `Id bytea` holds a 16-byte ULID (`Ulid.ToByteArray()` / `new Ulid(bytes)`). Do not use `uuid` or `text`.
 - Timestamps are `timestamptz` and always written as UTC.
 - The status is `integer`; the application enum is the source of the allowed values.
-- The unique index encodes the business rule the service also pre-checks; it closes the race between the
+- The unique index encodes the business rule the handler also pre-checks; it closes the race between the
   pre-check and the insert.
 - Name indexes after the rule: `UX_{Table}_{Columns}`, `IX_{Table}_{Column}`, `PK_{Table}`.
 
@@ -76,11 +76,31 @@ public static class ProjectTable
 }
 ```
 
-`{Feature}SortColumns.cs` maps the **entity property names** to the physical columns with an ordinal-ignore-case
-dictionary. Only keys in this map can reach `ORDER BY`; the direction is a `bool`, never raw text.
+`Application/{Feature}/Sorting/{Feature}SortCatalog.cs` owns the **accepted sort keys** and the description
+used by OpenAPI:
 
-The application filter validator has its own list of valid sort keys. Keep both in sync: the validator gives a
-friendly `400`, the whitelist is the last line of defence. A new sortable field means editing both.
+```csharp
+public static class ProjectSortCatalog
+{
+    public static readonly IReadOnlyList<string> Keys =
+        [nameof(ProjectDto.Id), nameof(ProjectDto.Name), nameof(ProjectDto.Description),
+         nameof(ProjectDto.CreatedAt), nameof(ProjectDto.UpdatedAt), nameof(ProjectDto.Status),
+         nameof(ProjectDto.CreatedBy), nameof(ProjectDto.UpdatedBy)];
+
+    public static IReadOnlySet<string> KeySet { get; } =
+        new HashSet<string>(Keys, StringComparer.OrdinalIgnoreCase);
+
+    public static string Describe() =>
+        string.Join(", ", Keys.Select(key => char.ToLowerInvariant(key[0]) + key[1..]));
+}
+```
+
+`Infrastructure/Repositories/{Feature}/Helpers/{Feature}SortColumns.cs` maps the same keys to the physical
+columns with an ordinal-ignore-case dictionary. Only keys in this map can reach `ORDER BY`; the direction is a
+`bool`, never raw text. `{Feature}SortColumnsTests` asserts
+`{Feature}SortCatalog.KeySet.SetEquals({Feature}SortColumns.Map.Keys)`, so the validator's friendly `400` and
+the SQL column map cannot drift. A new sortable field edits the catalog and the map, then fails the test until
+both agree.
 
 ## Repository rules
 
@@ -94,8 +114,8 @@ friendly `400`, the whitelist is the last line of defence. A new sortable field 
 - The date range applies only when both bounds are present; convert to UTC (`DateTime.SpecifyKind`/`ToUniversalTime`)
   before sending a `TimestampTz`.
 - Paging appends `LIMIT @pageSize OFFSET @offset`; validate page number/size before calling.
-- Sorting resolves through `{Feature}SortColumns`; unknown keys throw `ArgumentException`, which the validator
-  should have caught.
+- Sorting resolves through `{Feature}SortColumns` after the validator accepts the key through
+  `{Feature}SortCatalog`; unknown keys throw `ArgumentException`, which the validator should have caught.
 - Row mapping is manual, in the exact `{Feature}Columns` order, with `IsDBNull` checks for every nullable
   column.
 - Return `Result<T>` for a constraint violation that is a business outcome; return `null`/`false` for a row
@@ -115,7 +135,7 @@ Do not catch `PostgresException` broadly; a connection failure or a syntax error
 
 ## Query filter
 
-`Application/{Feature}/Queries/{Feature}Filter.cs` is the persistence-neutral query shape:
+`Application/{Feature}/Handlers/Queries/{Feature}Filter.cs` is the persistence-neutral query shape:
 
 ```csharp
 public sealed record ProjectFilter
@@ -174,7 +194,7 @@ Repositories are scoped; they take the factory, not the connection string.
 - [ ] Schema script applies from an empty database and is idempotent enough for a fresh container.
 - [ ] Unique index name matches `{Feature}Table.Unique...IndexName`.
 - [ ] Every query is parameterised; table/column names come from constants.
-- [ ] Sort whitelist and application validator list match.
+- [ ] Sort catalog and column map match; a unit test proves it.
 - [ ] Row mapping covers every column with `IsDBNull`.
 - [ ] ULIDs are `bytea`; timestamps are UTC `timestamptz`.
 - [ ] Unique violation maps to `ConflictError`, not `500`.

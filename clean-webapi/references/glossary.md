@@ -15,13 +15,20 @@ code alone does not show; treat them as ADR summaries.
 | **Entity** | The Domain persistence model (`ProjectEntity`). Never leaves Application/Infrastructure. |
 | **DTO** | The Application projection (`ProjectDto`). It crosses from Application to Api. |
 | **Response** | The API public contract (`ProjectResponse`). It implements `IBaseResponse` and is the OpenAPI schema. |
+| **Handler** | One Application use case (`CreateProjectHandler`). It implements `IHandler<TInput, TResult>` and exposes `HandleAsync`. |
+| **Service** | A shared collaborator used by several handlers (`ITodoTitleService`; the template has none yet, so create it when a second handler needs the behaviour). Its interface lives in `Application/Abstractions/Services`; it is not a use case. |
 | **Port** | An Application interface implemented by Infrastructure (`IProjectRepository`). |
 | **Adapter** | An Infrastructure implementation of a port (`ProjectRepository`) or a configuration source. |
 | **Repository** | The data-access adapter. It may return `Result<T>` for a constraint violation. |
 | **Filter** | A persistence-neutral query shape (`ProjectFilter`); the API parses strings into it. |
 | **Result** | `Result<T>`: success with a value or failure with an `Error`. |
 | **Error** | A typed business failure (`NotFoundError`, `ConflictError`, ...) mapped to HTTP in Api. |
-| **Owner scope** | `ICurrentUser.OwnerScope`: `null` for admins, the email for everyone else. The repository filter. |
+| **Owner scope** | `OwnerScope` (`ICurrentUser.Owner`): a value type with `VisibleOwner` (`null` for admins), `OwnerForCreate` (always the caller) and `FilterOwners(requested)`. The rule lives here, not in the HTTP mappers. |
+| **Validation set** | `ValidatorSet<TInput>`: the validators for one input. It refuses an empty set, so a missing registration fails at startup. |
+| **Sort catalog** | `{Feature}SortCatalog` (Application): the accepted sort keys and their description. |
+| **Sort column map** | `{Feature}SortColumns` (Infrastructure): the catalog keys mapped to physical columns; a test asserts alignment. |
+| **Projection** | A deliberately partial read type (`TodoTitle`) in `Application/{Feature}/Projections`; it crosses the port and handler without nullable fields or `!` casts. |
+| **Endpoint adapter** | `{Feature}Endpoints` (Api): the request → input → handler → HTTP response plumbing, kept out of `{Feature}Routes`. |
 | **Audit fields** | `CreatedAt`, `UpdatedAt`, `CreatedBy`, `UpdatedBy`. |
 | **Policy** | An ASP.NET authorization policy (`User`, `Operator`, `Admin`, `External`) requiring a role and an email claim. |
 | **Test user** | A fixed identity used by tests (`TodoUser`, `TodoOperator`, ...). One per role plus negative cases. |
@@ -39,24 +46,27 @@ code alone does not show; treat them as ADR summaries.
 
 ### D-001 — `Result<T>` and `Error` live in Application
 
-**Decision:** Application services return `Result<T>`; the `Error` hierarchy is in `Application/Results`; the
-API maps errors to HTTP in `ApiResultExtensions`.
+**Decision:** Application handlers return `Result<T>`; the `Error` hierarchy is in `Application/Results`;
+`ApiResultExtensions` chooses the status and `ProblemDetailsFactory` builds every ProblemDetails body.
 
 **Reason:** business failures are expected outcomes, not exceptions; HTTP is an Api concern. Domain stays free
-of transport concepts.
+of transport concepts, and one factory keeps `type`/`traceId` consistent.
 
 **Consequence:** a new error type needs a mapping and OpenAPI metadata in the same change. Domain must not
 reference `Result<T>`.
 
 ### D-002 — No MediatR, no validation decorators, no pipeline
 
-**Decision:** services inherit `ValidationService`, call `ExecuteAsync`, and receive their validators through
-the constructor.
+**Decision:** handlers inherit `ValidationService`, call `ExecuteAsync`, and receive a `ValidatorSet<TInput>`
+through the constructor. `ValidatorSet` refuses an empty registration, and `Program.Main` enables
+`ValidateOnBuild`.
 
-**Reason:** explicit and AOT-safe. No assembly scanning, no dynamic dispatch, no hidden pipeline.
+**Reason:** explicit and AOT-safe. No assembly scanning, no dynamic dispatch, no hidden pipeline; a missing
+registration is a startup failure, not a silent validation bypass.
 
-**Consequence:** a new service must be registered and must pass its validators explicitly. There is no
-"automatic" cross-cutting behaviour; add it to the base class if it is truly shared.
+**Consequence:** a new handler must be registered by its closed `IHandler<TInput, TResult>` interface and its
+`ValidatorSet<TInput>` must be registered too. There is no "automatic" cross-cutting behaviour; add it to the
+base class if it is truly shared.
 
 ### D-003 — ADO.NET/Npgsql instead of EF Core or Dapper
 
@@ -64,18 +74,19 @@ the constructor.
 
 **Reason:** predictable SQL, no reflection/expression trees, Native AOT compatibility, no ORM model drift.
 
-**Consequence:** every query and mapping is written by hand; the `*Table`/`*SortColumns` helpers and the schema
-script are the single sources of truth. Adding a column means touching the SQL, the table constants, the
-repository mapping and the tests.
+**Consequence:** every query and mapping is written by hand; `*Table`, `*SortCatalog`, `*SortColumns` and the
+schema script are the sources of truth. Adding a sort key edits the catalog and the column map, and the
+alignment test fails until both agree.
 
 ### D-004 — Explicit composition root
 
-**Decision:** `ConfigureServices` registers every validator, service and repository; `EndpointExtension`
-registers every route group.
+**Decision:** `ConfigureServices` registers every validator, `ValidatorSet<T>`, handler and repository;
+`EndpointExtension` registers every route group.
 
 **Reason:** the AOT analyzer and the reader both see every type; no assembly scanning, no magic.
 
-**Consequence:** a forgotten registration is a runtime failure; the component tests catch it.
+**Consequence:** a forgotten registration fails at startup through `ValidateOnBuild`; the component tests
+catch anything that only fails when a request is served.
 
 ### D-005 — One AppHost, three modes
 
@@ -146,5 +157,37 @@ versa.
 **Reason:** an agent must be able to work after the sample is removed or changed; the example demonstrates the
 same patterns without depending on the repository's sample files.
 
-**Consequence:** use `assets/examples/` when `Todo` is absent or modified. When removing `Todo`, follow the
+**Consequence:** use `../assets/examples/` when `Todo` is absent or modified. When removing `Todo`, follow the
 ordered checklist and keep the `db-init` readiness query valid.
+
+### D-012 — Handlers own use cases; services are shared collaborators
+
+**Decision:** one handler per use case in `{Feature}/Handlers/{Verb}`. Behaviour reused by several handlers
+gets an interface in `Application/Abstractions/Services`.
+
+**Reason:** keeps use cases explicit and avoids a service layer that duplicates handlers.
+
+**Consequence:** do not create a service for one handler; extract it when a second handler needs it.
+
+### D-013 — OwnerScope is a value type, not a nullable string
+
+**Decision:** `ICurrentUser.Owner` returns `OwnerScope`; the type owns `VisibleOwner`, `OwnerForCreate` and
+`FilterOwners`. The HTTP request mappers call those methods; they do not implement the rule themselves.
+
+**Reason:** one authorization rule, one place to test it. A nullable string hides the difference between
+"admin can see every owner" and "owner is missing".
+
+**Consequence:** new endpoints use `currentUser.Owner`; a new owner rule is added to `OwnerScope` and covered by
+`OwnerScopeTests`, not copied into a mapper.
+
+### D-014 — Partial reads use projection types; endpoint plumbing uses an adapter
+
+**Decision:** a query that selects a subset returns a projection type from
+`Application/{Feature}/Projections` (for example `TodoTitle`). The request → input → handler → response
+plumbing lives in `{Feature}Endpoints`; `{Feature}Routes` keeps templates and metadata.
+
+**Reason:** partial entities/DTOs push `!` casts and runtime surprises to the response edge; repeated endpoint
+plumbing hides the convention in six copies.
+
+**Consequence:** do not fill an all-nullable DTO and cast it later; add a projection. Do not put owner or result
+mapping back in the route group; add an adapter method.

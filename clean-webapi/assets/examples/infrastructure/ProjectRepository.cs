@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text;
-using {App}.Application.Project.Abstractions;
-using {App}.Application.Project.Queries;
+using {App}.Application.Abstractions.Repositories;
+using {App}.Application.Project.Handlers.Queries;
 using {App}.Application.Results;
 using {App}.Domain.Models.Entities;
 using {App}.Infrastructure.Data;
@@ -308,7 +308,8 @@ public sealed class ProjectRepository(INpgsqlConnectionFactory connectionFactory
 
     /// <summary>
     /// Appends the ORDER BY clause resolving property names through the
-    /// <see cref="ProjectSortColumns"/> whitelist. Direction comes from a boolean, never from raw text.
+    /// <see cref="ProjectSortColumns"/> map; the accepted keys come from ProjectSortCatalog. Direction
+    /// comes from a boolean, never from raw text.
     /// </summary>
     private static void AppendOrderBy(StringBuilder sql, IEnumerable<KeyValuePair<string, bool>>? sortProperties)
     {

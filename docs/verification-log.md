@@ -2,6 +2,21 @@
 
 Maintainer-only. Not loaded by agents.
 
+## 2026-11-03 — Architecture refresh of the skill
+
+**Method:** aligned the skill with `CleanWebApiTemplate` `HEAD` after the architecture review applied
+`ValidatorSet<T>`, `OwnerScope`, `{Feature}SortCatalog`, projection types, `ProblemDetailsFactory` as the only
+problem-details builder, and the `{Feature}Endpoints` adapter. Updated `SKILL.md`, all affected references, the
+`Project` example, the evals and the registration snippets.
+
+**Results (template repository):** build 0 warnings; 324 tests passed; Native AOT publish 0 warnings;
+coverage 98.1% line / 96.2% branch; `npm run verify` passed.
+
+**Pattern changes the skill now teaches:** a missing validator set fails at startup; sort keys live in one
+Application catalog and one Infrastructure column map with an alignment test; `OwnerScope` is a value type with
+`VisibleOwner`/`OwnerForCreate`/`FilterOwners`; partial reads use a projection type instead of `!` casts; the
+route group keeps metadata and delegates plumbing to `{Feature}Endpoints`.
+
 ## 2026-11-03 — `Project` example injected into a clean template copy
 
 **Method:** took a clean copy of `CleanWebApiTemplate` at `HEAD` (`git archive`), copied
@@ -43,6 +58,6 @@ through `Aspire.Hosting.Testing`; the Aspire CLI was not exercised in this run.
 ### Not run in this verification
 
 - `npm run verify` and `npm run coverage` in the injected copy. The commands and thresholds are documented in
-  `references/quality-gates.md`; the individual build/publish/test gates above were run instead.
+  `../clean-webapi/references/quality-gates.md`; the individual build/publish/test gates above were run instead.
 - A manual `aspire start` + dashboard/Swagger UI walkthrough. The component and functional suites start the same
   AppHost and were run end to end.

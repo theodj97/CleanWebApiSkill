@@ -1,5 +1,5 @@
-using {App}.Application.Project.Abstractions;
-using {App}.Application.Project.Queries;
+using {App}.Application.Abstractions.Repositories;
+using {App}.Application.Project.Handlers.Queries;
 using {App}.Application.Results;
 using {App}.Domain.Models.Entities;
 using {App}.Infrastructure.Data;

@@ -2,16 +2,15 @@
 name: clean-webapi
 description: >-
   Works on ASP.NET Core 10 repositories generated from the Clean Web API Template: Clean Architecture layers
-  (Api, Application, Domain, Infrastructure, ServiceDefaults), Minimal API route groups, FluentValidation
-  inputs and services, Result<T>/Error, ADO.NET/Npgsql repositories, PostgreSQL schema scripts, OpenBao
-  secrets, JWT modes, role policies and owner scoping, Native AOT, Aspire local development, and the
-  unit/component/functional/architecture test suite. Use when adding or changing a feature, endpoint,
-  validation rule, SQL table or seed row, configuration key, secret, authorization policy or test; when
-  choosing where code belongs or naming a type; when fixing an IL2xxx/IL3xxx AOT warning; when reviewing a
-  diff against the repository conventions; when explaining the architecture or what each test project
-  covers; or when removing the sample Todo feature. Also for "add a feature", "add an endpoint", "add a
-  test", "change the schema", "add a setting", "add a role", "why does this build fail with IL2026", and
-  "review this change".
+  (Api, Application, Domain, Infrastructure, ServiceDefaults), Minimal API route groups, FluentValidation inputs
+  and handlers, Result/Error, ADO.NET/Npgsql repositories, PostgreSQL schema scripts, OpenBao secrets, JWT
+  modes, role policies and owner scoping, Native AOT, Aspire local development, and the
+  unit/component/functional/architecture test suite. Use when adding or changing a feature, endpoint, validation
+  rule, SQL table or seed row, configuration key, secret, authorization policy or test; when choosing where code
+  belongs or naming a type; when fixing an IL2xxx/IL3xxx AOT warning; when reviewing a diff against the
+  repository conventions; when explaining the architecture or the test suite; or when removing the sample Todo
+  feature. Also for "add a feature", "add an endpoint", "add a test", "change the schema", "add a role", "why
+  does this build fail with IL2026", and "review this change".
 ---
 
 # Clean Web API: architecture, conventions and tests
@@ -31,18 +30,20 @@ on it: every pattern this skill needs is reproduced in `assets/examples/` as a s
 2. **The API stays Native AOT.** No reflection on runtime paths, no `dynamic`, no reflection-based JSON, no
    Swashbuckle schema generation, no AOT/trimming suppressions. Fix `IL2xxx`/`IL3xxx` at the cause.
    → `references/native-aot.md`
-3. **Everything is registered explicitly.** No assembly scanning: a new service, validator, repository,
-   route group or JSON contract is added to `ConfigureServices`, `EndpointExtension`,
+3. **Everything is registered explicitly.** No assembly scanning: a new handler, validator, `ValidatorSet`,
+   repository, route group or JSON contract is added to `ConfigureServices`, `EndpointExtension`,
    `AppJsonSerializerContext` and the OpenAPI descriptors by hand. → `references/api.md`
-4. **Business outcomes are results.** Services and repositories return `Result<T>` with a typed `Error`;
-   they do not throw for validation, not-found or conflict. The API maps `Error` to ProblemDetails in one
-   place. → `references/architecture.md` § Result and Error
-5. **SQL is parameterised and whitelisted.** Table and column names come from `*Table` constants; values are
-   bound parameters; sort keys resolve through `*SortColumns`; user input never reaches SQL text.
-   → `references/persistence.md`
-6. **Ownership is not input.** `createdBy` comes from the JWT email (`ICurrentUser.OwnerScope`), never from a
-   request body. Non-admins only see and change their own rows; admins see every owner.
-   → `references/security.md`
+4. **Business outcomes are results.** Handlers and repositories return `Result<T>` with a typed `Error`;
+   they do not throw for validation, not-found or conflict. `ApiResultExtensions` chooses the status and
+   `ProblemDetailsFactory` builds the body, so there is one ProblemDetails interface.
+   → `references/architecture.md` § Result and Error
+5. **SQL is parameterised and column-allow-listed.** Table and column names come from `*Table` constants; values are
+   bound parameters; sort keys resolve through the feature's `*SortCatalog` (accepted vocabulary) and
+   `*SortColumns` (physical map); user input never reaches SQL text. → `references/persistence.md`
+6. **Ownership is not input.** `createdBy` comes from the JWT email through `ICurrentUser.Owner`, an
+   `OwnerScope` value type; never from a request body. `OwnerScope` decides `VisibleOwner`,
+   `OwnerForCreate` and `FilterOwners`. Non-admins only see and change their own rows; admins see every
+   owner. → `references/security.md`
 7. **Every change ships with the right tests.** Unit for pure logic and validators, component for the HTTP
    pipeline and database state, functional for a complete flow, architecture for dependency and structure
    rules. → `references/testing.md`
@@ -62,7 +63,7 @@ Read the user's request and use the first row that matches. When two rows apply,
 | Add a table, column, index, seed row, query or sort key | **Schema** | `references/persistence.md`, `references/feature-slice.md` § 4 |
 | Add or change a setting, secret, connection string or OpenBao path | **Config** | `references/configuration-and-secrets.md` |
 | Add a role, policy, claim or ownership rule | **Auth** | `references/security.md` |
-| Start, stop, debug or extend the local environment | **Aspire** | `references/aspire.md`; use `dotnet-aspire` for setup/repair |
+| Start, stop, debug or extend the local environment | **Aspire** | `references/aspire.md`; use `aspire` for setup/repair and `aspire-orchestration` for start/stop |
 | An `IL2xxx`/`IL3xxx` warning or an AOT publish failure | **AOT** | `references/native-aot.md` |
 | Review a diff or the working tree | **Review** | `references/review-checklist.md`; use `code-review` for the full two-axis review |
 | Explain the architecture, a pattern, a name or the test suite | **Explain** | `references/architecture.md`, `references/conventions.md`, `references/glossary.md`, `references/testing.md`, `references/test-catalog.md` |
@@ -104,25 +105,32 @@ configuration concepts.
 
 ### Phase 3 — Application
 
-Add the input, validator, port, filter, DTO, DTO mapping, service interface and service. Validation is input
-shape; uniqueness and other business rules belong to the service. The service returns `Result<T>`.
+Add the input, validator, port, filter, DTO, DTO mapping and handler. The handler implements
+`IHandler<TInput, TResult>`, exposes `HandleAsync` and returns `Result<TResult>`. It takes a
+`ValidatorSet<TInput>`, not a raw `IEnumerable<IValidator<TInput>>`; the set refuses an empty registration,
+and `ValidateOnBuild` makes that a startup failure. Validation is input shape; uniqueness and other business
+rules belong to the handler. If more than one handler needs the same behaviour, add a shared service interface
+in `Application/Abstractions/Services`; keep one handler per use case.
 
-**Done when** the service has no ASP.NET, Npgsql or `IHttpContextAccessor` reference, every business failure
-is a typed `Error`, and the port is the only thing Infrastructure will implement.
+**Done when** the handler has no ASP.NET, Npgsql or `IHttpContextAccessor` reference, every business failure
+is a typed `Error`, the port is the only thing Infrastructure will implement, and every handler has a
+registered `ValidatorSet<TInput>`.
 
 ### Phase 4 — Infrastructure and database
 
-Implement the port with ADO.NET/Npgsql, a `{Feature}Table` helper and a `{Feature}SortColumns` whitelist.
-Add the ordered SQL script and the seed. Handle the unique index as a `ConflictError`.
+Implement the port with ADO.NET/Npgsql, a `{Feature}Table` helper, a `{Feature}SortCatalog` in Application
+and a `{Feature}SortColumns` map in Infrastructure. Add the ordered SQL script and the seed. Handle the
+unique index as a `ConflictError`.
 
-**Done when** every value is a bound parameter, every column comes from a constant, the sort whitelist
-matches the application validator, and the schema script applies from an empty database.
+**Done when** every value is a bound parameter, every column comes from a constant, the sort catalog and
+the SQL map name the same keys (a unit test proves it), and the schema script applies from an empty database.
 
 ### Phase 5 — API
 
-Add the request/response contracts, `ToInput` mapping, route group and endpoint metadata. Register the
-validator, service, repository and route group explicitly; add the request/response types to
-`AppJsonSerializerContext` and the schema descriptions to the OpenAPI descriptors.
+Add the request/response contracts, `ToInput` mapping, the `{Feature}Endpoints` adapter, the route group and
+endpoint metadata. Register the validator, `ValidatorSet<T>`, handler, repository and route group explicitly;
+add the request/response types to `AppJsonSerializerContext` and the schema descriptions to the OpenAPI
+descriptors.
 
 **Done when** every endpoint returns the documented status codes, every contract type is in the JSON context,
 and the OpenAPI document names every operation and response.
@@ -175,8 +183,8 @@ at the end of this file.
 | `references/architecture.md` | Layer responsibilities, dependency rule, request lifecycle, patterns and their reasons, "where does this code go?" |
 | `references/conventions.md` | Naming law, folder map, file-per-type, C# style, SQL and test naming, commit convention |
 | `references/feature-slice.md` | The ordered touch list for a new feature or endpoint, and removing the sample |
-| `references/api.md` | Route groups, `IGroupMap`, Result→HTTP, ProblemDetails, OpenAPI, JSON source generation, status codes |
-| `references/persistence.md` | ADO.NET repository, SQL scripts, seed, parameterisation, sort whitelist, unique index, test repository |
+| `references/api.md` | Route groups, `IGroupMap`, `{Feature}Endpoints` adapter, Result→HTTP, ProblemDetails, OpenAPI, JSON source generation, status codes |
+| `references/persistence.md` | ADO.NET repository, SQL scripts, seed, parameterisation, `{Feature}SortCatalog` + `{Feature}SortColumns`, unique index, test repository |
 | `references/configuration-and-secrets.md` | `AppSettings`, `SectionBase`, validators, OpenBao, AppHost, configuration precedence, test contract |
 | `references/security.md` | JWT modes, policies, claims, `OwnerScope`, 401 vs 403, test identities |
 | `references/testing.md` | What each test project covers, fixtures, attributes, builders, resets, coverage thresholds |
@@ -193,16 +201,19 @@ at the end of this file.
 `assets/examples/` contains an end-to-end `Project` feature (create, read, filter): domain, application,
 infrastructure, API, database, tests and local OpenAPI examples. It uses `{App}` placeholders and assumes the
 template's shared types
-(`BaseEntity`, `BaseAbstractValidator`, `ValidationService`, `Result<T>`, `Error`, `ICurrentUser`,
-`IBaseResponse`) exist. Copy the files in layer order and replace `Project`/`project` with the real feature.
+(`BaseEntity`, `IHandler<TInput, TResult>`, `BaseAbstractValidator`, `ValidationService`, `ValidatorSet<T>`,
+`Result<T>`, `Error`, `OwnerScope`, `ICurrentUser`, `IBaseResponse`) exist. Copy the files in layer order and
+replace `Project`/`project` with the real feature. The example also uses a `ProjectSortCatalog`,
+`ProjectEndpoints` and a `ProjectSortColumnsTests` alignment test.
 
 Use the example when the repository's `Todo` sample is absent, has been modified, or when the user asks for an
 independent reference. Do not copy the `Todo` feature from the template repository into the generated project.
 
 ## Companion skills
 
-- **`dotnet-aspire`** — setup, repair and debugging of the local environment and test infrastructure when the
-  AppHost is missing, duplicated or not used by the tests. This skill covers the template's own topology.
+- **`aspire`** — setup, repair and debugging of the local environment and test infrastructure when the AppHost
+  is missing, duplicated or not used by the tests; use `aspire-orchestration` for the start/stop lifecycle.
+  This skill covers the template's own topology.
 - **`code-review`** — the two-axis Standards + Spec review. Give it `references/review-checklist.md` and
   `references/conventions.md` as the standards sources.
 - **`tdd`** — build the slice one red-green test at a time.

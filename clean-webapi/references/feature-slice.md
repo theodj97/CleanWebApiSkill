@@ -4,17 +4,35 @@ A feature in this repository is a **vertical slice**: one business concept cross
 Infrastructure, API, SQL, local environment and tests. Use this list in order. Skip a step only when the change
 genuinely does not need it, and say so in the plan.
 
+## Contents
+
+- [Touch list at a glance](#touch-list-at-a-glance)
+- [1. Domain](#1-domain)
+- [2. Application](#2-application)
+  - [2.1 Input and validator](#21-input-and-validator)
+  - [2.2 Port and query filter](#22-port-and-query-filter)
+  - [2.3 DTO and mapping](#23-dto-and-mapping)
+  - [2.4 Handler](#24-handler)
+- [3. Infrastructure](#3-infrastructure)
+- [4. Database](#4-database)
+- [5. API](#5-api)
+- [6. Local environment](#6-local-environment)
+- [7. Tests](#7-tests)
+- [8. Docs](#8-docs)
+- [Adding a new project or database](#adding-a-new-project-or-database)
+- [Removing the sample feature](#removing-the-sample-feature)
+
 ## Touch list at a glance
 
 | # | Layer | Files |
 |---|---|---|
 | 1 | Domain | `Models/Entities/{Feature}Entity.cs`, `Models/Enums/{Feature}/E{Feature}Status.cs`, `Models/{Feature}/{Feature}Constraints.cs` |
-| 2 | Application | `{Feature}/{Verb}/{Verb}{Feature}Input.cs`, `{Verb}{Feature}InputValidator.cs`, `I{Verb}{Feature}Service.cs`, `{Verb}{Feature}Service.cs`; `{Feature}/{Feature}Validator.cs`; `{Feature}/Abstractions/I{Feature}Repository.cs`; `{Feature}/Queries/{Feature}Filter.cs`; `Dtos/{Feature}/{Feature}Dto.cs` + `{Feature}DtoExtensions.cs` |
+| 2 | Application | `{Feature}/Handlers/{Verb}/{Verb}{Feature}Input.cs`, `{Verb}{Feature}InputValidator.cs`, `{Verb}{Feature}Handler.cs`; `{Feature}/Handlers/{Feature}Validator.cs`; `Abstractions/Repositories/I{Feature}Repository.cs`; `{Feature}/Handlers/Queries/{Feature}Filter.cs`; `{Feature}/Sorting/{Feature}SortCatalog.cs`; `{Feature}/Projections/{Projection}.cs` when a read selects a subset; `Dtos/{Feature}/{Feature}Dto.cs` + `{Feature}DtoExtensions.cs` |
 | 3 | Infrastructure | `Repositories/{Feature}/{Feature}Repository.cs`, `Repositories/{Feature}/Helpers/{Feature}Table.cs`, `Helpers/{Feature}SortColumns.cs` |
 | 4 | Database | `local/database/000N__{feature}.sql`, `local/database/seed/000N__{feature}.sql` |
-| 5 | API | `Routes/{Feature}/{Verb}/{Verb}{Feature}Request.cs`, `Models/Responses/{Feature}/{Feature}Response.cs`, `Routes/{Feature}/{Feature}Routes.cs`; `Configuration/AppJsonSerializerContext.cs`, `Configuration/{Feature}OpenApiSchemas.cs`, `Configuration/OpenApiConfiguration.cs`, `ConfigureServices.cs`, `Extensions/EndpointExtension.cs` |
+| 5 | API | `Routes/{Feature}/{Verb}/{Verb}{Feature}Request.cs`, `Models/Responses/{Feature}/{Feature}Response.cs`, `Routes/{Feature}/{Feature}Endpoints.cs`, `Routes/{Feature}/{Feature}Routes.cs`; `Configuration/AppJsonSerializerContext.cs`, `Configuration/{Feature}OpenApiSchemas.cs`, `Configuration/OpenApiConfiguration.cs`, `ConfigureServices.cs`, `Extensions/EndpointExtension.cs` |
 | 6 | Local | `local/openapi/examples.json`, `bodies/`, `responses/`; `local/tools/devtoken.json` / `local/openapi/users.json` if roles change; `local/aspire/.../AppHost.cs` only if a resource changes |
-| 7 | Tests | Unit validator + service, component endpoints/auth/ownership, OpenAPI contract, functional flow, architecture rules, `Tests.Shared` builder/repository |
+| 7 | Tests | Unit validator + handler, component endpoints/auth/ownership, OpenAPI contract, functional flow, architecture rules, `Tests.Shared` builder/repository |
 | 8 | Docs | `README.md` API table, `tests/README.md` if categories/identities change, `local/local-development.md` if topology/seed/tokens change |
 
 ## 1. Domain
@@ -77,37 +95,51 @@ public class CreateProjectInputValidator : ProjectValidator<CreateProjectInput>
 
 ### 2.2 Port and query filter
 
-- `I{Feature}Repository` lives in `Application/{Feature}/Abstractions`. It uses only Domain types, `Result<T>`
-  and `{Feature}Filter`.
+- `I{Feature}Repository` lives in `Application/Abstractions/Repositories`. It uses only Domain types,
+  `Result<T>` and `{Feature}Filter`. Shared service interfaces live next to it in
+  `Application/Abstractions/Services`.
 - Reads return `Task<T?>`, `Task<IReadOnlyList<T>>` or `Task<bool>`; writes return `Task<Result<T>>` when a
   unique index can fail as a business outcome.
+- A read that selects only some fields returns a projection type from
+  `Application/{Feature}/Projections` (for example `TodoTitle`), not a partially filled entity or DTO. The
+  projection crosses the port, handler and response mapper without `!` casts.
 - `{Feature}Filter` is a `record` with `IReadOnlyList<T>?` for lists and `DateTime?` for dates. The API request
   uses `string[]`/`string?`; parsing happens in `ToFilter`.
+- `{Feature}SortCatalog` lives in `Application/{Feature}/Sorting`; it owns the accepted sort keys and their
+  description. The validators and the OpenAPI schema read it.
 
 ### 2.3 DTO and mapping
 
-- `{Feature}Dto` is a flat `record` with nullable properties (the projection may fill only some).
-- `{Feature}DtoExtensions.ToDto` is `internal` and maps entity → DTO in Application. Add a second method for a
-  projection (`ToNameDto`) rather than filling unrelated fields.
-- The API maps DTO → response; Application never knows the response type.
+- `{Feature}Dto` is the full read shape; use it for the ordinary endpoints.
+- When the query selects a subset, add a `{Projection}` record in `Application/{Feature}/Projections` (for
+  example `TodoTitle`). The port returns it and the response mapper consumes it directly. Do not fill unrelated
+  DTO fields and do not narrow the DTO later with `!`.
+- `{Feature}DtoExtensions.ToDto` is `internal` and maps entity → DTO in Application.
+- The API maps DTO/projection → response; Application never knows the response type.
 
-### 2.4 Service and interface
+### 2.4 Handler
 
-- `I{Verb}{Feature}Service` exposes `Task<Result<{Feature}Dto?>> {Verb}Async({Verb}{Feature}Input input, CancellationToken cancellationToken)`.
-- `{Verb}{Feature}Service` is `sealed`, derives from `ValidationService`, takes the port and
-  `IEnumerable<IValidator<TInput>>` through its primary constructor, and wraps the action in
-  `ExecuteAsync`.
+- `{Verb}{Feature}Handler` is `sealed`, derives from `ValidationService`, takes the port and a
+  `ValidatorSet<TInput>` through its primary constructor, and wraps the action in `ExecuteAsync`.
+- It implements `IHandler<{Verb}{Feature}Input, TResult>`, whose contract is
+  `Task<Result<TResult>> HandleAsync({Verb}{Feature}Input input, CancellationToken cancellationToken)`.
+  The endpoint adapter injects `IHandler<TInput, TResult>`; there is no per-use-case interface.
+- `ValidatorSet<TInput>` refuses an empty registration. Register it explicitly and enable `ValidateOnBuild`;
+  a missing set is a startup failure, not a silently unchecked input.
 - Business rules go here: uniqueness (pre-check + repository `ConflictError`), not-found, state transitions,
   ownership checks that need the stored row.
 - Trim/normalise before persistence (`input.Name.Trim()`), set audit fields (`DateTime.UtcNow`), and return
   `Result<T>.Failure(new ConflictError(...))` rather than throwing.
+- If a second handler needs the same behaviour and it is not a repository port, extract a shared service
+  interface to `Application/Abstractions/Services` and implement it next to the feature. The handler still
+  owns the use case; the service is only the shared collaborator.
 
 ```csharp
-public sealed class CreateProjectService(IProjectRepository repository,
-                                        IEnumerable<IValidator<CreateProjectInput>> validators)
-    : ValidationService, ICreateProjectService
+public sealed class CreateProjectHandler(IProjectRepository repository,
+                                        ValidatorSet<CreateProjectInput> validators)
+    : ValidationService, IHandler<CreateProjectInput, ProjectDto?>
 {
-    public Task<Result<ProjectDto?>> CreateAsync(CreateProjectInput input, CancellationToken cancellationToken) =>
+    public Task<Result<ProjectDto?>> HandleAsync(CreateProjectInput input, CancellationToken cancellationToken) =>
         ExecuteAsync(input, validators, async () =>
         {
             ProjectEntity entity = input.ToEntity();
@@ -130,15 +162,16 @@ public sealed class CreateProjectService(IProjectRepository repository,
 }
 ```
 
-**Done when:** the service compiles without ASP.NET/Npgsql references; every failure is a typed `Error`; the
+**Done when:** the handler compiles without ASP.NET/Npgsql references; every failure is a typed `Error`; the
 port is the only persistence surface; the validator has no database access.
 
 ## 3. Infrastructure
 
 - `{Feature}Table` holds the table and column constants and the unique index name. It is the single source of
   truth for SQL text; the DDL stays in `local/database`.
-- `{Feature}SortColumns` maps **entity property names** to **column names**; only keys in this map can reach
-  `ORDER BY`. It must match the valid sort list in the Application filter validator.
+- `{Feature}SortCatalog` (Application) owns the accepted sort keys; `{Feature}SortColumns` maps those keys to
+  **column names**. Only keys in the map can reach `ORDER BY`. Add a unit test that asserts
+  `{Feature}SortCatalog.KeySet.SetEquals({Feature}SortColumns.Map.Keys)`; the two lists must not drift.
 - `{Feature}Repository` implements the port with `INpgsqlConnectionFactory`. Every query uses bound
   parameters; every column name comes from `{Feature}Table`; every row is mapped explicitly.
 - `Ulid` maps to `bytea` (`id.ToByteArray()` / `new Ulid(bytes)`); `DateTime` maps to `timestamptz` in UTC;
@@ -147,8 +180,9 @@ port is the only persistence surface; the validator has no database access.
   `PostgresException when exception.SqlState == PostgresErrorCodes.UniqueViolation` and returned as
   `ConflictError`; do not let it become a 500.
 
-**Done when:** every value is a parameter; the sort whitelist is complete; the repository maps every column
-with `IsDBNull` checks; no business rule lives here beyond translating a constraint violation.
+**Done when:** every value is a parameter; the sort catalog and the column map agree, enforced by a test; the
+repository maps every column with `IsDBNull` checks; no business rule lives here beyond translating a constraint
+violation.
 
 ## 4. Database
 
@@ -168,25 +202,36 @@ and the `db-init` job exits 0.
 
 ## 5. API
 
-- `Routes/{Feature}/{Verb}/{Verb}{Feature}Request.cs`: request contract, `ToInput(...)` mapping. The owner
-  comes from `currentUser.OwnerScope` or `currentUser.Email`, never from the body.
+- `Routes/{Feature}/{Verb}/{Verb}{Feature}Request.cs`: request contract, `ToInput(OwnerScope owner)` mapping.
+  The owner comes from `currentUser.Owner`, never from the body: create uses `OwnerForCreate`, reads use
+  `VisibleOwner`, filter uses `FilterOwners`.
 - `Models/Responses/{Feature}/{Feature}Response.cs`: response contract implementing
-  `IBaseResponse<{Feature}Dto?, {Feature}Response>`; `ToResponseModel` maps the DTO.
-- `Routes/{Feature}/{Feature}Routes.cs`: `sealed class {Feature}Routes(ICurrentUser currentUser) : IGroupMap`.
-  Create the groups with `CreateAuthorizedRouteGroupBuilder(RouteName, [Constants.X_POLICY])`, map endpoints,
-  add `WithName`/`WithSummary`/`WithDescription` and `Produces`/`ProducesProblem`.
-- `ConfigureServices.cs`: register the validator, service and repository explicitly. No scanning.
+  `IBaseResponse<{Feature}Dto?, {Feature}Response>`; `ToResponseModel` maps the DTO. A projection response
+  implements `IBaseResponse<{Projection}, {Projection}Response>`.
+- `Routes/{Feature}/{Feature}Endpoints.cs`: the endpoint adapter. Each method takes `HttpContext`, `ICurrentUser`,
+  the handler and `CancellationToken`, maps the request to the input, calls the handler and returns
+  `result.ToResponse<...>(context)` or `result.ToCreatedResponse<...>(context, ...)`.
+- `Routes/{Feature}/{Feature}Routes.cs`: `sealed class {Feature}Routes : IGroupMap` (no `ICurrentUser`
+  constructor). Create the groups with `CreateAuthorizedRouteGroupBuilder(RouteName, [Constants.X_POLICY])`, map
+  the adapter methods, add `WithName`/`WithSummary`/`WithDescription` and `Produces`/`ProducesProblem`.
+- `ConfigureServices.cs`: register the validator, the `ValidatorSet<TInput>`, the handler and the repository
+  explicitly. No scanning. Handlers are registered by their closed `IHandler<TInput, TResult>` interface.
+- `Program.cs`: keep `UseDefaultServiceProvider(options => options.ValidateOnBuild = true)` so a missing
+  `ValidatorSet<T>` fails at startup.
 - `EndpointExtension.cs`: `services.TryAddEnumerable(ServiceDescriptor.Transient<IGroupMap, {Feature}Routes>());`.
 - `AppJsonSerializerContext.cs`: add every request, response and collection type (`JsonSerializable`), plus
   any new error/ProblemDetails type.
 - `OpenApiConfiguration.cs`: add the tag and call `{Feature}OpenApiSchemas.DescribeSchemas(document)`.
 - `{Feature}OpenApiSchemas.cs`: patch schema properties with descriptions, formats, max lengths, enums and
-  examples. Use `OpenApiSchemaHelpers` (`Describe`, `Property`, `ArrayItems`, `DescribePaging`, `DescribeSort`,
-  `DescribeStatus`). Those helpers carry Todo-specific text (`title`, Pending/InProgress/...); pass or override
-  the feature's own keys and statuses, or generalize the helper.
+  examples. Use `nameof({Verb}{Feature}Request)` / `nameof({Feature}Response)` for schema keys and
+  `{Feature}Constraints` for lengths. Use `OpenApiSchemaHelpers` (`Describe`, `Property`, `ArrayItems`,
+  `DescribePaging`, `DescribeSort`, `DescribeStatus`). `DescribeSort` writes the Todo catalog and
+  `DescribeStatus` derives from `ETodoStatus`; for another feature override the sort description with
+  `{Feature}SortCatalog.Describe()` and, if its status values differ, set `schema.Enum` from its enum.
 
 **Done when:** every route has a policy, a name, a summary, a description and the documented status codes;
-every contract is in the JSON context; the OpenAPI document contains the new schemas and operations.
+every contract is in the JSON context; the OpenAPI document contains the new schemas and operations; the
+endpoint adapter is the only place that maps `Result` to `IResult`.
 
 ## 6. Local environment
 
@@ -210,7 +255,10 @@ Write the smallest set that proves the behaviour at the right level. A feature n
 | Test | Project | Proves |
 |---|---|---|
 | Input validator | `Api.UnitTests` | Shape rules, null/empty/length/email/ULID/sort/paging; no Docker |
-| Service | `Api.UnitTests` | Business rules with a substituted port: uniqueness, not-found, propagation of `ConflictError`, trimming, audit fields |
+| Validation set | `Api.UnitTests` | `ValidatorSet<T>` rejects an empty set; validators aggregate their failures |
+| Handler | `Api.UnitTests` | Business rules with a substituted port: uniqueness, not-found, propagation of `ConflictError`, trimming, audit fields. Build the handler with a real `ValidatorSet` (or a test validator), not `[]` |
+| Owner scope | `Api.UnitTests` | `VisibleOwner`, `OwnerForCreate`, `FilterOwners` for admins and non-admins |
+| Sort alignment | `Api.UnitTests` | `{Feature}SortCatalog.KeySet` equals `{Feature}SortColumns.Map.Keys` |
 | Endpoints | `Api.ComponentTests` | HTTP contract, validation → 400, duplicate → 409, missing → 204/404, persistence, ownership, ProblemDetails |
 | Authorization matrix | `Api.ComponentTests` | 401 anonymous, 403 without role/wrong role, 200/201 for allowed roles, on every new protected route |
 | Ownership | `Api.ComponentTests` | Non-admin cannot read/update/delete another owner's row; admin can |
@@ -223,6 +271,7 @@ Also add to `Tests.Shared`:
 - `{Feature}Builder` with valid defaults and a `CreatedBy`/status method.
 - `{Feature}TestRepository` over the real repository, with `AddAsync`, `FindAsync`, `FindByNameAsync`,
   `CountAsync` and `TryAddAsync` for conflict assertions.
+- `{Feature}SortColumnsTests` (or the existing helper test) asserting the catalog and the SQL map agree.
 - A `Projects` property on `TestServerFixtureBase` initialized with the connection string, and its use in the
   component tests (`Fixture.Projects`).
 
@@ -278,7 +327,7 @@ green at each step:
 
 2. Remove the API surface: `Routes/Todo`, `Models/Responses/Todo`, the `Todo` tag and descriptor call in
    `OpenApiConfiguration`, the `TodoRoutes` registration in `EndpointExtension`, the Todo request/response
-   entries in `AppJsonSerializerContext`, and the Todo validator/service/repository registrations in
+   entries in `AppJsonSerializerContext`, and the Todo validator/handler/repository registrations in
    `ConfigureServices`.
 3. Remove Application: `Application/Todo/**`, `Application/Dtos/Todo/**`.
 4. Remove Domain: `Domain/Models/Entities/TodoEntity.cs`, `Domain/Models/Enums/Todo/**`,

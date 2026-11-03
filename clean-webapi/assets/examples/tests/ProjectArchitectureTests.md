@@ -8,16 +8,16 @@ Application:
 [Fact]
 public void ProjectPortAndQueryContract_ShouldLiveInApplication()
 {
-    Assert.Equal("{App}.Application.Project.Abstractions", typeof(IProjectRepository).Namespace);
-    Assert.Equal("{App}.Application.Project.Queries", typeof(ProjectFilter).Namespace);
+    Assert.Equal("{App}.Application.Abstractions.Repositories", typeof(IProjectRepository).Namespace);
+    Assert.Equal("{App}.Application.Project.Handlers.Queries", typeof(ProjectFilter).Namespace);
 }
 ```
 
 Add the using directives the test needs:
 
 ```csharp
-using {App}.Application.Project.Abstractions;
-using {App}.Application.Project.Queries;
+using {App}.Application.Abstractions.Repositories;
+using {App}.Application.Project.Handlers.Queries;
 ```
 
 ## Generalize the helper condition
@@ -31,8 +31,9 @@ currently hardcodes `Infrastructure.Repositories.Todo.Helpers`:
                               StringComparison.Ordinal),
 ```
 
-Adding `ProjectTable` and `ProjectSortColumns` under `Repositories.Project.Helpers` makes that test fail. Replace
-the hardcoded prefix with a namespace check, so every feature's `Helpers` folder is accepted:
+Adding `ProjectTable` and `ProjectSortColumns` under `Repositories.Project.Helpers` makes that test fail. The
+`ProjectSortCatalog` is in Application, so it is not part of this condition. Replace the hardcoded prefix with
+a namespace check, so every feature's `Helpers` folder is accepted:
 
 ```csharp
 using {App}.Infrastructure.Repositories.Project;
@@ -56,6 +57,14 @@ public void InfrastructureRepositories_ShouldContainOnlyRepositoriesAndTheirHelp
 
 Keep the assertion: it is what stops `Infrastructure/Repositories` from becoming a dumping ground. Generalize
 the namespace, not the rule.
+
+## Sort catalog alignment
+
+`ProjectSortCatalog` (Application) and `ProjectSortColumns` (Infrastructure) are two views of the same
+vocabulary. The unit test `ProjectSortColumnsTests` asserts
+`ProjectSortCatalog.KeySet.SetEquals(ProjectSortColumns.Map.Keys)` and that every key resolves
+case-insensitively. Keep it next to the existing helper tests; it is not an architecture test, but it protects
+the same "no drift" property.
 
 ## New projects and namespaces
 

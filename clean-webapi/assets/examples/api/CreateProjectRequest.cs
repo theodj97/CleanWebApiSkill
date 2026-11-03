@@ -1,4 +1,5 @@
-using {App}.Application.Project.Create;
+using {App}.Application.Abstractions.Identity;
+using {App}.Application.Project.Handlers.Create;
 
 namespace {App}.Api.Routes.Project.Create;
 
@@ -11,10 +12,10 @@ public sealed class CreateProjectRequest
     /// <summary>Optional details for the project. Up to 1000 characters.</summary>
     public string Description { get; set; } = string.Empty;
 
-    public CreateProjectInput ToInput(string userEmail) => new()
+    public CreateProjectInput ToInput(OwnerScope owner) => new()
     {
         Name = Name,
         Description = Description,
-        CreatedBy = userEmail
+        CreatedBy = owner.OwnerForCreate
     };
 }

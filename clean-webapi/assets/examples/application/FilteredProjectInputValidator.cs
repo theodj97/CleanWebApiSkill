@@ -1,9 +1,9 @@
-using {App}.Application.Abstractions;
-using {App}.Application.Dtos.Project;
+using {App}.Application.Validation;
+using {App}.Application.Project.Sorting;
 using {App}.Domain.Models.Project;
 using FluentValidation;
 
-namespace {App}.Application.Project.Filtered;
+namespace {App}.Application.Project.Handlers.Filtered;
 
 public class FilteredProjectInputValidator : ProjectValidator<FilteredProjectInput>
 {
@@ -48,17 +48,7 @@ public class FilteredProjectInputValidator : ProjectValidator<FilteredProjectInp
             .WithMessage($"Property {nameof(FilteredProjectInput.PageSize)} must be greater than 0 if property {nameof(FilteredProjectInput.PageNumber)} is not null.");
 
         RuleFor(x => x.SortProperties).Custom((sortProperties, context) => ValidateSortBy(sortProperties,
-                                                                                           new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                                                                                           {
-                                                                                               nameof(ProjectDto.Id),
-                                                                                               nameof(ProjectDto.Name),
-                                                                                               nameof(ProjectDto.Description),
-                                                                                               nameof(ProjectDto.CreatedAt),
-                                                                                               nameof(ProjectDto.UpdatedAt),
-                                                                                               nameof(ProjectDto.Status),
-                                                                                               nameof(ProjectDto.CreatedBy),
-                                                                                               nameof(ProjectDto.UpdatedBy),
-                                                                                           },
+                                                                                           ProjectSortCatalog.KeySet,
                                                                                            context)).When(x => x.SortProperties is not null);
     }
 }

@@ -1,7 +1,7 @@
 using System.Globalization;
-using {App}.Application.Project.Queries;
+using {App}.Application.Project.Handlers.Queries;
 
-namespace {App}.Application.Project.Filtered;
+namespace {App}.Application.Project.Handlers.Filtered;
 
 public sealed record FilteredProjectInput
 {

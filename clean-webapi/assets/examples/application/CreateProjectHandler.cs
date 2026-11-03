@@ -1,18 +1,18 @@
+using {App}.Application.Abstractions.Handlers;
+using {App}.Application.Abstractions.Repositories;
 using {App}.Application.Dtos.Project;
-using {App}.Application.Project.Abstractions;
 using {App}.Application.Results;
 using {App}.Application.Validation;
 using {App}.Domain.Models.Entities;
 using {App}.Domain.Models.Enums.Project;
-using FluentValidation;
 
-namespace {App}.Application.Project.Create;
+namespace {App}.Application.Project.Handlers.Create;
 
-public sealed class CreateProjectService(IProjectRepository projectRepository,
-                                         IEnumerable<IValidator<CreateProjectInput>> validators)
-    : ValidationService, ICreateProjectService
+public sealed class CreateProjectHandler(IProjectRepository projectRepository,
+                                         ValidatorSet<CreateProjectInput> validators)
+    : ValidationService, IHandler<CreateProjectInput, ProjectDto?>
 {
-    public Task<Result<ProjectDto?>> CreateAsync(CreateProjectInput input, CancellationToken cancellationToken) =>
+    public Task<Result<ProjectDto?>> HandleAsync(CreateProjectInput input, CancellationToken cancellationToken) =>
         ExecuteAsync(input, validators, async () =>
         {
             ProjectEntity project = input.ToEntity();
@@ -22,7 +22,7 @@ public sealed class CreateProjectService(IProjectRepository projectRepository,
             project.UpdatedAt = now;
             project.Status = (int)EProjectStatus.Draft;
 
-            // Uniqueness is a business rule, not input validation, so the service owns it and
+            // Uniqueness is a business rule, not input validation, so the handler owns it and
             // reports a conflict. The unique index still protects the race below.
             if (await projectRepository.NameExistsAsync(project.Name,
                                                         project.CreatedBy,

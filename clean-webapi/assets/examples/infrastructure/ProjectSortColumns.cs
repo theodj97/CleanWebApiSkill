@@ -3,12 +3,11 @@ using {App}.Domain.Models.Entities;
 namespace {App}.Infrastructure.Repositories.Project.Helpers;
 
 /// <summary>
-/// Explicit (reflection-free, Native AOT friendly) whitelist of the properties that can be used to
-/// sort Project queries, mapped to their physical column names. Only columns in this map can reach the
-/// ORDER BY clause. Keep it in sync with the valid sort properties declared in the application-layer
-/// filter validator.
+/// Explicit (reflection-free, Native AOT friendly) map of the Project sort keys to their physical
+/// column names. Only columns in this map can reach the ORDER BY clause. The accepted keys live in
+/// <c>ProjectSortCatalog</c>; <c>ProjectSortColumnsTests</c> asserts both sets are identical.
 /// </summary>
-internal static class ProjectSortColumns
+public static class ProjectSortColumns
 {
     public static readonly IReadOnlyDictionary<string, string> Map =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)

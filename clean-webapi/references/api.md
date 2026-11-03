@@ -6,26 +6,19 @@ descriptors.
 
 ## Route groups
 
-A feature implements `IGroupMap`:
+A feature implements `IGroupMap` and keeps only templates, policy and metadata. The request → input →
+handler → response plumbing lives in a `{Feature}Endpoints` adapter:
 
 ```csharp
-public sealed class ProjectRoutes(ICurrentUser currentUser) : IGroupMap
+public sealed class ProjectRoutes : IGroupMap
 {
     private const string RouteName = "Project";
 
     public void MapGroup(IEndpointRouteBuilder app)
     {
         RouteGroupBuilder userGroup = app.CreateAuthorizedRouteGroupBuilder(RouteName, [Constants.USER_POLICY]);
-        RouteGroupBuilder operatorGroup = app.CreateAuthorizedRouteGroupBuilder(RouteName, [Constants.OPERATOR_POLICY]);
 
-        userGroup.MapGet("/{id}", async (string id,
-                                         IGetProjectByIdService service,
-                                         CancellationToken cancellationToken) =>
-        {
-            GetProjectByIdInput input = new() { Id = id, CreatedBy = currentUser.OwnerScope };
-            Result<ProjectDto?> result = await service.GetAsync(input, cancellationToken);
-            return result.ToResponse<ProjectDto?, ProjectResponse>();
-        })
+        userGroup.MapGet("/{id}", ProjectEndpoints.GetByIdAsync)
         .WithName("GetProjectById")
         .WithSummary("Get a project by id")
         .WithDescription("...")
@@ -34,6 +27,56 @@ public sealed class ProjectRoutes(ICurrentUser currentUser) : IGroupMap
     }
 }
 ```
+
+`ProjectRoutes` does not inject `ICurrentUser`; the adapter resolves it per request. This keeps the route file
+free of owner and result-mapping logic and makes the endpoint pattern easy to compare across features.
+
+## Endpoint adapter
+
+```csharp
+internal static class ProjectEndpoints
+{
+    public static async Task<IResult> GetByIdAsync(string id,
+                                                   HttpContext context,
+                                                   ICurrentUser currentUser,
+                                                   IHandler<GetProjectByIdInput, ProjectDto?> handler,
+                                                   CancellationToken cancellationToken)
+    {
+        GetProjectByIdInput input = new() { Id = id, CreatedBy = currentUser.Owner.VisibleOwner };
+        Result<ProjectDto?> result = await handler.HandleAsync(input, cancellationToken);
+
+        return result.ToResponse<ProjectDto?, ProjectResponse>(context);
+    }
+
+    public static async Task<IResult> FilterAsync(FilteredProjectRequest request,
+                                                  HttpContext context,
+                                                  ICurrentUser currentUser,
+                                                  IHandler<FilteredProjectInput, IEnumerable<ProjectDto?>> handler,
+                                                  CancellationToken cancellationToken)
+    {
+        FilteredProjectInput input = request.ToInput(currentUser.Owner);
+        Result<IEnumerable<ProjectDto?>> result = await handler.HandleAsync(input, cancellationToken);
+
+        return result.ToResponse<ProjectDto?, ProjectResponse>(context);
+    }
+
+    public static async Task<IResult> CreateAsync(CreateProjectRequest request,
+                                                  HttpContext context,
+                                                  ICurrentUser currentUser,
+                                                  IHandler<CreateProjectInput, ProjectDto?> handler,
+                                                  CancellationToken cancellationToken)
+    {
+        CreateProjectInput input = request.ToInput(currentUser.Owner);
+        Result<ProjectDto?> result = await handler.HandleAsync(input, cancellationToken);
+
+        return result.ToCreatedResponse<ProjectDto?, ProjectResponse>(
+            context, dto => $"/api/Project/{dto!.Id}");
+    }
+}
+```
+
+The adapter takes `HttpContext` because `ApiResultExtensions` needs it for the ProblemDetails `traceId`. It is
+the only place that knows the `Result` → `IResult` convention; the route file stays declarative.
 
 `CreateAuthorizedRouteGroupBuilder` (in `Api/Common/Abstractions/EndpointRouteBuilderExtensions.cs`):
 
@@ -48,12 +91,13 @@ also requires an email claim (`ClaimTypes.Email` or `"email"`), so a valid token
 
 ## Endpoint delegate
 
-- Parameters are typed: route/query/body contracts, services, `ICurrentUser`, `CancellationToken`.
+- Parameters are typed: route/query/body contracts, services, `HttpContext`, `ICurrentUser`,
+  `CancellationToken`.
 - The route parameter `string id` is validated by the input validator (`ValidateUlid`), not by model binding.
-- The body contract maps to the application input in the delegate: `request.ToInput(currentUser.Email)` or
-  `request.ToInput(currentUser.OwnerScope)`.
-- The service returns `Result<T>`; the delegate returns `result.ToResponse<...>()`.
-- Do not catch business exceptions in the delegate; `GlobalExceptionHandler` handles unexpected ones.
+- The body contract maps to the application input in the adapter: `request.ToInput(currentUser.Owner)`.
+- The handler returns `Result<T>`; the adapter returns `result.ToResponse<...>(context)` or
+  `result.ToCreatedResponse<...>(context, ...)`.
+- Do not catch business exceptions in the adapter; `GlobalExceptionHandler` handles unexpected ones.
 
 ## Result → HTTP
 
@@ -66,25 +110,27 @@ also requires an email claim (`ClaimTypes.Email` or `"email"`), so a valid token
 | `Success` from `ToCreatedResponse` | `201 Created` + `Location` |
 | `BadRequestError` | `400` ProblemDetails |
 | `DomainError` | `400` ProblemDetails |
-| `UnauthorizedError` | `401` |
-| `ForbiddenError` | `403` |
+| `UnauthorizedError` | `401` ProblemDetails |
+| `ForbiddenError` | `403` ProblemDetails |
 | `NotFoundError` | `404` ProblemDetails |
 | `ConflictError` | `409` ProblemDetails |
 | unexpected exception | `500` ProblemDetails |
 
-Use `ToResponse<TDto, TResponse>()` for an object, `ToResponse<TDto, TResponse>()` for a collection
-(the same overload resolves `IEnumerable<TDto>`), `ToResponse<T>()` for a scalar (for example `bool`), and
-`ToCreatedResponse<TDto, TResponse>(dto => $"/api/Project/{dto!.Id}")` for a create.
+Use `ToResponse<TDto, TResponse>(context)` for an object, `ToResponse<TDto, TResponse>(context)` for a
+collection (the same overload resolves `IEnumerable<TDto>`), `ToResponse<T>(context)` for a scalar (for
+example `bool`), and `ToCreatedResponse<TDto, TResponse>(context, dto => $"/api/Project/{dto!.Id}")` for a
+create. The `HttpContext` is required because the ProblemDetails body includes its `traceId`.
 
 `IsNoContent` treats `null` and an empty `IEnumerable` as no content; an empty string is a value.
 
 ## ProblemDetails
 
+- `ProblemDetailsFactory` is the only module that builds and writes the body: `application/problem+json` with
+  `status`, `title`, `type` (`https://httpstatuses.io/{status}`), `detail` and a `traceId` extension.
+- `ApiResultExtensions.ResolveError` chooses the status and passes the application `Error` to the factory;
+  `GlobalExceptionHandler` and `UseStatusCodePages` use the same factory.
 - `GlobalExceptionHandler` handles malformed JSON, bad requests and unexpected exceptions; it never leaks the
   exception message for a 500.
-- `UseStatusCodePages` gives 404/405 and other status-only responses the same contract.
-- `ProblemDetailsFactory` writes `application/problem+json` with `status`, `title`, `type`, `detail` and a
-  `traceId` extension.
 - New error types must be added to `ResolveError` and to the OpenAPI `ProducesProblem` metadata; otherwise the
   document lies.
 
@@ -95,11 +141,16 @@ Use `ToResponse<TDto, TResponse>()` for an object, `ToResponse<TDto, TResponse>(
   schema descriptors.
 - `{Feature}OpenApiSchemas.DescribeSchemas(document)` patches the generated schemas: property descriptions,
   formats (`ulid`, `email`, `date-time`), max lengths, enums and examples. Use `OpenApiSchemaHelpers`.
-- **Shared helper text is Todo-specific.** `DescribeSort` writes the Todo key list, `DescribeStatus` defaults to
-  Todo statuses, and `CommonOpenApiSchemas` describes `KeyValuePairOfstringAndboolean` with Todo keys. For a
-  second feature, pass a feature-specific description or override it after calling the helper (see
-  `ProjectOpenApiSchemas`), or generalize the helper. A document that says `title` for a feature whose field is
-  `name` is wrong even though the code compiles.
+- Use `nameof({Verb}{Feature}Request)` / `nameof({Feature}Response)` for schema keys and
+  `{Feature}Constraints` for max lengths. String literals and numbers drift silently when a type or constraint
+  is renamed.
+- **Shared helper text is Todo-specific.** `DescribeSort` writes the Todo `TodoSortCatalog` list and
+  `DescribeStatus` derives its enum from `ETodoStatus`; `CommonOpenApiSchemas` describes
+  `KeyValuePairOfstringAndboolean` with Todo keys. For a second feature, own a `{Feature}SortCatalog`, call
+  `DescribeSort` and override the description with `{Feature}SortCatalog.Describe()` (see
+  `ProjectOpenApiSchemas`), or generalize the helper. If the feature status enum differs, set `schema.Enum`
+  from that enum. A document that says `title` for a feature whose field is `name` is wrong even though the
+  code compiles.
 - Endpoint metadata: `WithName` (operation id), `WithSummary`, `WithDescription`, `Produces<T>(status)` and
   `ProducesProblem(status)`.
 - Add a document transformer only if the descriptor cannot express the change; it must be static and
@@ -141,7 +192,8 @@ internal partial class AppJsonSerializerContext : JsonSerializerContext;
 - `MapInboundClaims = true`, so `role` becomes `ClaimTypes.Role` and `email` becomes `ClaimTypes.Email`.
 - The policies require both the role and an email claim. A token without email gets `403`, not `401`.
 - The route group policy is the first authorization boundary; ownership inside the handler is the second.
-  Non-admin callers pass `currentUser.OwnerScope` (their email) to the service; admins pass `null`.
+  Non-admin callers use `currentUser.Owner.VisibleOwner` (their email); admins use `null` (every owner).
+  Create always uses `Owner.OwnerForCreate`; filter uses `Owner.FilterOwners(requested)`.
 - Never read `createdBy`/`owner` from the body for authorization; the JWT is the source.
 
 ## Validation and status codes
@@ -157,7 +209,7 @@ The input validator produces the `400` cases:
 - paging: page number and page size must both be present and greater than 0;
 - sort keys not in the allowed list, or duplicated keys.
 
-The service produces the business cases:
+The handler produces the business cases:
 
 - uniqueness → `409 Conflict` (pre-check and unique index);
 - not found/not visible → `404` or `204` depending on the endpoint contract;
@@ -166,14 +218,16 @@ The service produces the business cases:
 
 ## Endpoint checklist
 
-- [ ] Route group uses the narrowest policy and the feature tag.
+- [ ] Route group uses the narrowest policy and the feature tag; the plumbing lives in `{Feature}Endpoints`.
 - [ ] Every operation has `WithName`, `WithSummary`, `WithDescription`, success `Produces` and error
       `ProducesProblem`.
-- [ ] Request → input mapping takes the owner from `ICurrentUser`.
-- [ ] Service returns `Result<T>`; delegate uses `ToResponse`/`ToCreatedResponse`.
+- [ ] Request → input mapping takes `currentUser.Owner`; create uses `OwnerForCreate`, reads use `VisibleOwner`,
+      filter uses `FilterOwners`.
+- [ ] Handler returns `Result<T>`; adapter uses `ToResponse(context)`/`ToCreatedResponse(context, ...)`.
 - [ ] New contracts are in `AppJsonSerializerContext`.
-- [ ] New schemas are described in `{Feature}OpenApiSchemas`.
-- [ ] New error types are mapped in `ApiResultExtensions` and documented.
+- [ ] New schemas are described in `{Feature}OpenApiSchemas`, with `nameof` and `{Feature}Constraints`.
+- [ ] New error types are mapped in `ApiResultExtensions.ResolveError` (body through `ProblemDetailsFactory`)
+      and documented.
 - [ ] Component tests cover 200/201/204/400/401/403/404/409 as applicable.
 - [ ] `OpenApiContractTests` includes the new operation ids and status codes.
 - [ ] README API table updated.

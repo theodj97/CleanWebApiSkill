@@ -12,10 +12,15 @@ private static IServiceCollection ConfigureServicesAndValidators(this IServiceCo
     services.AddTransient<IValidator<GetProjectByIdInput>, GetProjectByIdInputValidator>();
     services.AddTransient<IValidator<FilteredProjectInput>, FilteredProjectInputValidator>();
 
-    // Services
-    services.AddTransient<ICreateProjectService, CreateProjectService>();
-    services.AddTransient<IGetProjectByIdService, GetProjectByIdService>();
-    services.AddTransient<IFilteredProjectService, FilteredProjectService>();
+    // One set per input: an empty set is a startup failure, not a silent validation bypass.
+    services.AddTransient<ValidatorSet<CreateProjectInput>>();
+    services.AddTransient<ValidatorSet<GetProjectByIdInput>>();
+    services.AddTransient<ValidatorSet<FilteredProjectInput>>();
+
+    // Handlers
+    services.AddTransient<IHandler<CreateProjectInput, ProjectDto?>, CreateProjectHandler>();
+    services.AddTransient<IHandler<GetProjectByIdInput, ProjectDto?>, GetProjectByIdHandler>();
+    services.AddTransient<IHandler<FilteredProjectInput, IEnumerable<ProjectDto?>>, FilteredProjectHandler>();
 
     return services;
 }
@@ -28,6 +33,18 @@ private static IServiceCollection AddPersistence(this IServiceCollection service
 
     return services;
 }
+```
+
+## `Api/Program.cs`
+
+`ValidateOnBuild` turns a missing `ValidatorSet<T>` (or a set with no validator) into a startup failure:
+
+```csharp
+builder.Host.UseDefaultServiceProvider(options =>
+{
+    options.ValidateScopes = true;
+    options.ValidateOnBuild = true;
+});
 ```
 
 ## `Api/Extensions/EndpointExtension.cs`

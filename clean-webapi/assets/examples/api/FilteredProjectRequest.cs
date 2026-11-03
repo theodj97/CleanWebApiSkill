@@ -1,4 +1,5 @@
-using {App}.Application.Project.Filtered;
+using {App}.Application.Abstractions.Identity;
+using {App}.Application.Project.Handlers.Filtered;
 
 namespace {App}.Api.Routes.Project.Filter;
 
@@ -32,14 +33,12 @@ public sealed class FilteredProjectRequest
     /// <summary>Sort keys and directions, applied in order.</summary>
     public IEnumerable<KeyValuePair<string, bool>>? SortProperties { get; set; }
 
-    public FilteredProjectInput ToInput(string? ownerScope) => new()
+    public FilteredProjectInput ToInput(OwnerScope owner) => new()
     {
         Ids = Ids,
         Names = Names,
         Statuses = Statuses,
-        // Administrators (ownerScope null) may filter by another user. For everyone else the owner
-        // is always the authenticated user from the validated JWT.
-        CreatedBys = ownerScope is null ? CreatedBys : [ownerScope],
+        CreatedBys = owner.FilterOwners(CreatedBys),
         StartDate = StartDate,
         EndDate = EndDate,
         PageNumber = PageNumber,

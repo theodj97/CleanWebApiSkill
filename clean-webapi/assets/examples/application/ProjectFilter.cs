@@ -1,4 +1,4 @@
-namespace {App}.Application.Project.Queries;
+namespace {App}.Application.Project.Handlers.Queries;
 
 /// <summary>
 /// Strongly-typed filter for project search queries. Every value is sent to the database as a bound

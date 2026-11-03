@@ -4,8 +4,9 @@ The template has **one AppHost** under `local/aspire/{App}.AppHost`. It serves l
 component/functional test fixtures. There is no second AppHost for tests.
 
 For setup, repair or deep debugging of the environment (no AppHost, a duplicated test AppHost, a broken
-container, a missing `devtoken`), use the **`dotnet-aspire`** skill. This reference covers the template's own
-topology and the points a feature change touches.
+container, a missing `devtoken`), use the **`aspire`** skill; for the start/stop lifecycle use
+`aspire-orchestration`. This reference covers the template's own topology and the points a feature change
+touches.
 
 ## Topology
 

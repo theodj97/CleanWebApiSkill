@@ -1,8 +1,8 @@
-using {App}.Application.Project.Create;
+using {App}.Application.Project.Handlers.Create;
 
 namespace {App}.Api.UnitTests.Project;
 
-/// <summary>Unit coverage of the CreateProject input rules. Uniqueness is checked by the service, not the validator.</summary>
+/// <summary>Unit coverage of the CreateProject input rules. Uniqueness is checked by the handler, not the validator.</summary>
 public class CreateProjectInputValidatorTests
 {
     private readonly CreateProjectInputValidator _validator = new();

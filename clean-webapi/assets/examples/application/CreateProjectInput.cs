@@ -1,6 +1,6 @@
 using {App}.Domain.Models.Entities;
 
-namespace {App}.Application.Project.Create;
+namespace {App}.Application.Project.Handlers.Create;
 
 public sealed record CreateProjectInput
 {

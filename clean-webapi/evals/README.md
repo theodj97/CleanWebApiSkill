@@ -19,8 +19,8 @@ state, then grade the run against the expectations.
 ## Running them
 
 1. Copy the target repository to a clean directory for each run.
-2. Install `clean-webapi` in `.claude/skills/` or `.agents/skills/` for the "with skill" run; leave it out for
-   the baseline.
+2. Install `clean-webapi` in `.agents/skills/` (or `.claude/skills/`) for the "with skill" run; leave it out
+   for the baseline.
 3. Use the same agent/model, prompt and repository state for both runs.
 4. Save the transcript and the diff.
 5. Grade every expectation as pass/fail with evidence from the transcript or the diff.

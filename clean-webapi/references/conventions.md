@@ -12,26 +12,32 @@ src/{App}.Api/
 ├── Extensions/             ApiResultExtensions, EndpointExtension
 ├── Helpers/                configuration loader
 ├── Models/                 response contracts (`Models/Responses/{Feature}`) and interfaces
-├── Routes/{Feature}/       route group + `{Verb}` subfolders with request contracts
+├── Routes/{Feature}/       route group, `{Feature}Endpoints` adapter, `{Verb}` request contracts
 ├── ConfigureApplication.cs
 ├── ConfigureServices.cs
 └── Program.cs
 
 src/{App}.Application/
-├── Abstractions/           cross-feature application contracts (`ICurrentUser`, `BaseAbstractValidator`)
+├── Abstractions/
+│   ├── Handlers/          `IHandler<TInput, TResult>`
+│   ├── Identity/          `ICurrentUser`, `OwnerScope`
+│   ├── Repositories/      `I{Feature}Repository`
+│   └── Services/          shared service interfaces (only when two handlers share behaviour)
 ├── Dtos/{Feature}/         `{Feature}Dto`, `{Feature}DtoExtensions`
 ├── Results/                `Result<T>`, `Error` hierarchy
-├── Validation/             `ValidationService`, `ValidationRunner`
+├── Validation/             `ValidationService`, `ValidatorSet<TInput>`, `BaseAbstractValidator`
 └── {Feature}/
-    ├── {Feature}Validator.cs          shared rules for the feature
-    ├── Abstractions/                  `I{Feature}Repository`
-    ├── Queries/                       `{Feature}Filter`
-    ├── Create/                        Input, Validator, Service, Interface
-    ├── Delete/
-    ├── Filtered/
-    ├── GetById/
-    ├── GetTitles/                     projections, when the feature needs them
-    └── Update/
+    ├── Handlers/
+    │   ├── {Feature}Validator.cs      shared rules for the feature
+    │   ├── Queries/                   `{Feature}Filter`
+    │   ├── Create/                    Input, Validator, Handler
+    │   ├── Delete/
+    │   ├── Filtered/
+    │   ├── GetById/
+    │   ├── GetTitles/                 handler and input; the projection lives in `Projections`
+    │   └── Update/
+    ├── Projections/                   `{Projection}.cs` when a read selects a subset (`TodoTitle`)
+    └── Sorting/                       `{Feature}SortCatalog.cs` (accepted keys)
 
 src/{App}.Domain/
 ├── Models/
@@ -55,9 +61,14 @@ tests/{App}.ArchitectureTests/      dependency and structure rules
 tests/{App}.Tests.Shared/           fixtures, attributes, auth, data, database, http, waiting
 ```
 
-Keep a test next to the closest existing test: the template puts service tests under
+`Services` holds the interfaces of services shared by **several handlers** (for example, a title uniqueness
+service used by create and update). It is not a home for use cases: one handler per use case stays in
+`{Feature}/Handlers/{Verb}`. Do not create a service for a single handler; keep the behaviour in that handler
+until a second one needs it.
+
+Keep a test next to the closest existing test: the template puts handler tests under
 `Api.UnitTests/Application/{Feature}/` and input-validator tests under `Api.UnitTests/{Feature}/`. The folder
-should make the production type obvious; do not create a flat `Services/` or `Controllers/` folder.
+should make the production type obvious; do not create a flat `Services/` or `Controllers/` test folder.
 
 ## Naming law
 
@@ -69,37 +80,42 @@ should make the production type obvious; do not create a flat `Services/` or `Co
 | Application input | `{Verb}{Feature}Input` | `CreateProjectInput`, `UpdateProjectInput` |
 | Input validator | `{Verb}{Feature}InputValidator` | `CreateProjectInputValidator` |
 | Shared feature rules | `{Feature}Validator<TInput>` | `ProjectValidator<TInput>` |
-| Service interface | `I{Verb}{Feature}Service` | `ICreateProjectService` |
-| Service | `{Verb}{Feature}Service` | `CreateProjectService` |
+| Handler | `{Verb}{Feature}Handler` | `CreateProjectHandler` |
+| Handler contract | `IHandler<{Verb}{Feature}Input, TResult>` | `IHandler<CreateProjectInput, ProjectDto?>` |
+| Validation set | `ValidatorSet<TInput>` | `ValidatorSet<CreateProjectInput>` |
+| Shared service interface | `I{Concept}Service` | `ITodoTitleService` (hypothetical; the template has none yet) |
 | Query filter | `{Feature}Filter` or `{Verb}{Feature}Filter` | `ProjectFilter` |
 | DTO | `{Feature}Dto` | `ProjectDto` |
 | DTO mapping | `{Feature}DtoExtensions` | `ProjectDtoExtensions` |
+| Projection | `{Projection}` | `TodoTitle`, `ProjectTitle` |
 | Repository port | `I{Feature}Repository` | `IProjectRepository` |
 | Repository adapter | `{Feature}Repository` | `ProjectRepository` |
 | Table metadata | `{Feature}Table` | `ProjectTable` |
-| Sort whitelist | `{Feature}SortColumns` | `ProjectSortColumns` |
+| Sort catalog | `{Feature}SortCatalog` | `ProjectSortCatalog` |
+| Sort column map | `{Feature}SortColumns` | `ProjectSortColumns` |
 | API request | `{Verb}{Feature}Request` | `CreateProjectRequest` |
 | API response | `{Feature}Response` or `{Projection}Response` | `ProjectResponse` |
 | Route group | `{Feature}Routes` | `ProjectRoutes` |
+| Endpoint adapter | `{Feature}Endpoints` | `ProjectEndpoints` |
 | Error | `{Status}Error` | `BadRequestError`, `ConflictError` |
-| Test class | `{TypeUnderTest}Tests` | `CreateProjectServiceTests` |
-| Test method | `Method_Scenario_ExpectedResult` | `CreateAsync_WithDuplicateName_ReturnsConflict` |
+| Test class | `{TypeUnderTest}Tests` | `CreateProjectHandlerTests` |
+| Test method | `Method_Scenario_ExpectedResult` | `HandleAsync_WithDuplicateName_ReturnsConflict` |
 | Test builder | `{Feature}Builder` | `ProjectBuilder` |
 | Test repository | `{Feature}TestRepository` | `ProjectTestRepository` |
 
 Names are **singular** for a feature (`Project`, not `Projects`), except the folder that groups several use
-cases (`Application/Project/`). Verbs are `Create`, `Update`, `Delete`, `GetById`, `Filtered`, `GetTitles`.
+cases (`Application/Project/Handlers/`). Verbs are `Create`, `Update`, `Delete`, `GetById`, `Filtered`, `GetTitles`.
 The route group name is the feature name and is used as the OpenAPI tag.
 
 ## File conventions
 
 - One public type per file, file name equals the type name (`ProjectDto.cs`).
-- File-scoped namespaces; namespace mirrors the folder path (`{App}.Application.Project.Create`).
+- File-scoped namespaces; namespace mirrors the folder path (`{App}.Application.Project.Handlers.Create`).
 - `sealed` by default for classes that are not designed for inheritance; entities may be `sealed`.
-- Primary constructors for services, repositories and adapters.
+- Primary constructors for handlers, repositories and adapters.
 - `required` for non-nullable contract members that must be supplied; `init` for immutable input properties.
 - `record` for inputs, DTOs and query filters; `class`/`record` for request/response contracts as the existing
-  feature does; `sealed class` for entities and services.
+  feature does; `sealed class` for entities, handlers and services.
 - `internal` for helpers and mappings that do not cross the assembly boundary; `public` only for the contract
   a host needs.
 - XML comments on public API contracts (the API project generates the documentation file for OpenAPI).
@@ -112,7 +128,7 @@ C# style seen across the repository (follow it even where the analyzer does not 
 - `ArgumentNullException.ThrowIfNull`, `ArgumentException.ThrowIfNullOrWhiteSpace`.
 - Async methods end in `Async` and take `CancellationToken cancellationToken` last.
 - `Task<Result<T>>` for application operations; `Task<T?>`/`Task<bool>` for repository reads/deletes without a
-  business failure.
+  business failure. Handlers expose `HandleAsync` and implement `IHandler<TInput, TResult>`.
 - Constants in `UPPER_SNAKE_CASE` (`Constants.API_KEY`, `Constants.USER_POLICY`); private constants may be
   PascalCase (`TodoColumns`, `DuplicateTitleMessage`).
 - Private fields `camelCase`, with `_` only in test fixtures/helpers (`_repository`, `_clients`); production
@@ -134,14 +150,15 @@ C# style seen across the repository (follow it even where the analyzer does not 
 - Route group: `/api/{Feature}`; operations are relative (`/{id}`, `/filter`, `/titles`).
 - Operation ids: `{Verb}{Feature}` (`CreateProject`, `GetProjectById`, `FilterProjects`, `DeleteProject`).
 - OpenAPI tags: the feature name (`Project`, `Todo`).
-- ProblemDetails titles: reason phrase; detail: a human-readable sentence; type: the error type name.
+- ProblemDetails: title = the error title or reason phrase; detail = a human-readable sentence; type =
+  `https://httpstatuses.io/{status}` (the factory owns it, not the error class name).
 - JSON: `JsonSerializerDefaults.Web` (camelCase), source-generated context.
 
 ## Test naming and structure
 
 - `// Arrange`, `// Act`, `// Assert` in that order; one action in Act.
 - Name: `Method_Scenario_ExpectedResult` (`CreateAsync_WithDuplicateName_ReturnsConflict`).
-- Test classes mirror the production type; keep the folder next to the closest existing test (service tests under
+- Test classes mirror the production type; keep the folder next to the closest existing test (handler tests under
   `Application/{Feature}`, input-validator tests under `{Feature}`).
 - Component/functional test classes are named after the behaviour (`ProjectEndpointsTests`,
   `ProjectAuthorizationMatrixTests`, `ProjectLifecycleFlowTests`), not after the controller.

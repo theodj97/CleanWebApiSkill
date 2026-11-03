@@ -1,13 +1,13 @@
-using {App}.Application.Abstractions;
+using {App}.Application.Validation;
 using {App}.Domain.Models.Enums.Project;
 using {App}.Domain.Models.Project;
 using FluentValidation;
 
-namespace {App}.Application.Project;
+namespace {App}.Application.Project.Handlers;
 
 /// <summary>
 /// Shared rules for the Project validators. Uniqueness is deliberately not checked here: it is a
-/// business rule owned by the application services, which can report it as a conflict.
+/// business rule owned by the application handlers, which can report it as a conflict.
 /// </summary>
 public class ProjectValidator<TRequest> : BaseAbstractValidator<TRequest> where TRequest : class
 {
