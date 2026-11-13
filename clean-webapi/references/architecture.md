@@ -1,238 +1,181 @@
 # Architecture
 
-## The five runtime projects
+Five runtime projects, one dependency rule, and a request that walks from the endpoint to PostgreSQL and back.
+This reference explains the shape and the reasons behind it, so a change lands in the right layer instead of
+only compiling.
+
+## Projects and responsibilities
+
+| Project | Owns | May reference |
+|---|---|---|
+| `CleanWebApiTemplate.Domain` | Entities, enums, business constraints, value objects. | `System.*`, `Ulid` |
+| `CleanWebApiTemplate.Application` | Use cases, inputs, validators, results, DTOs, projections, ports, sort catalog, `ICurrentUser`/`OwnerScope`. | Domain, `FluentValidation` |
+| `CleanWebApiTemplate.Infrastructure` | ADO.NET repositories, table and sort-column maps, OpenBao configuration source. | Application, Domain, `Npgsql`, `Microsoft.Extensions.Configuration` |
+| `CleanWebApiTemplate.Api` | Composition root, routes, endpoint adapter, HTTP contracts, JSON contexts, OpenAPI, auth, ProblemDetails. | Application, Infrastructure, ServiceDefaults |
+| `CleanWebApiTemplate.ServiceDefaults` | OpenTelemetry wiring, `/health` and `/alive`, base health checks. | ASP.NET Core shared framework |
+
+`Application` never references `Infrastructure` or ASP.NET Core: it defines the ports that Infrastructure
+implements, and the Api supplies the caller through `ICurrentUser`. `Domain` has no framework or HTTP
+concept.
+
+The rule is enforced by `tests/CleanWebApiTemplate.ArchitectureTests`:
+
+- `DependencyRulesTests` loads the four assemblies and fails when a layer depends on an outer one, when
+  `Application` references the Infrastructure assembly, or when `Application`/`Domain` reference
+  `Microsoft.AspNetCore`.
+- `StructureTests` enforces the folder conventions: handlers are sealed and live under
+  `Application.{Feature}.{UseCase}`, shared contracts under `Application.Common`, infrastructure feature
+  types are repositories/table/sort maps, route groups live under `Api.{Feature}`.
+
+`BannedSymbols.txt` (wired into every `src/` project) blocks reflection and reflection-based JSON at compile
+time. It does not check dependency direction; the architecture tests do.
+
+## Folder map
 
 ```text
-src/
-├── {App}.Api              Minimal API: routes, authentication, ProblemDetails, OpenAPI, JSON contracts, composition root
-├── {App}.Application      Use cases, validators, Result<T>/Error, DTOs, repository ports, query filters
-├── {App}.Domain           Entities, enums, constraints; no framework references
-├── {App}.Infrastructure   Npgsql repositories, connection factory, OpenBao configuration source
-└── {App}.ServiceDefaults  OpenTelemetry and base health checks, shared by every host
+src/CleanWebApiTemplate.Domain/
+├── Common/                 BaseEntity, IBaseEntity
+└── Todo/                   TodoEntity, ETodoStatus, TodoConstraints
 
-local/                     AppHost, DB initializer, OpenBao initializer, Swagger sidecar, devtoken
-tests/                     Unit, component, functional and architecture tests, plus Tests.Shared
+src/CleanWebApiTemplate.Application/
+├── Common/
+│   ├── Handlers/           IHandler<TInput, TResult>
+│   ├── Identity/           ICurrentUser, OwnerScope
+│   ├── Results/            Result<T>, Error, IResultFactory<T>
+│   └── Validation/         BaseAbstractValidator, ValidationService, ValidatorSet, DateRange
+└── Todo/
+    ├── ITodoRepository.cs  the port
+    ├── TodoDto.cs          read model returned by the API
+    ├── TodoDtoExtensions.cs
+    ├── TodoFilter.cs       persistence-neutral query contract
+    ├── TodoTitle.cs        id/title projection
+    ├── TodoSortCatalog.cs  accepted sort keys
+    ├── TodoValidator.cs    shared rules for the feature
+    ├── Create/             CreateTodoInput, CreateTodoInputValidator, CreateTodoHandler
+    ├── GetById/
+    ├── Filter/
+    ├── Update/
+    ├── Delete/
+    └── GetTitles/
+
+src/CleanWebApiTemplate.Infrastructure/
+├── Secrets/                OpenBao client, source, provider, options, keys
+└── Todo/                   TodoRepository, TodoTable, TodoSortColumns
+
+src/CleanWebApiTemplate.Api/
+├── Common/
+│   ├── Abstractions/       IGroupMap, route-group helpers
+│   ├── Composition/        AddUseCase, startup checks
+│   ├── Responses/          IBaseResponse<TDto, TResponse>
+│   └── HttpContextCurrentUser.cs
+├── Configuration/          AppSettings, auth, JSON context, OpenAPI, ProblemDetails, exception handler
+├── Helpers/                AppConfigurationHelper
+├── Extensions/             ApiResultExtensions, EndpointExtension
+├── Todo/                   module, routes, endpoints, responses, requests, JSON context, OpenAPI schemas
+├── ConfigureServices.cs    composition root
+├── ConfigureApplication.cs middleware pipeline
+└── Program.cs
 ```
 
-## Dependency rule
+A feature is **one folder with its name in each layer**. Removing the sample is deleting those folders plus the
+module call, the SQL scripts and the tests. See `feature-slice.md`.
 
-```text
-Api ──────────► Application ──────────► Domain
- │                   ▲
- │                   │
- └──────────► Infrastructure ──────────► Domain
-```
+## ServiceDefaults
 
-| Project | May reference | Must not reference |
-|---|---|---|
-| `Domain` | `System.*` only | Application, Infrastructure, Api, ServiceDefaults, ASP.NET Core |
-| `Application` | Domain | Infrastructure, Api, ServiceDefaults, ASP.NET Core |
-| `Infrastructure` | Application, Domain | Api, ServiceDefaults |
-| `Api` | Application, Infrastructure, ServiceDefaults | — |
-| `ServiceDefaults` | ASP.NET Core and OpenTelemetry packages | Api, Application, Infrastructure, Domain |
-| `tests/*` | every runtime project and `local/` (the AppHost) | — |
-| `local/*` | runtime projects | — |
+`CleanWebApiTemplate.ServiceDefaults` is shared runtime code, not a layer:
 
-The rule is enforced twice:
-
-- `tests/{App}.ArchitectureTests/DependencyRulesTests.cs` (ArchUnitNET) checks namespaces and assembly
-  references.
-- `BannedSymbols.txt` + `Microsoft.CodeAnalysis.BannedApiAnalyzers` block reflection and reflection-based
-  JSON.
-
-When a change makes a new project or namespace, add the matching architecture test. When a change needs a
-type from an outer layer, the design is wrong: move the abstraction inward or the implementation outward.
-
-## Layer responsibilities
-
-| Layer | Put here | Never here |
-|---|---|---|
-| **Domain** | `{Feature}Entity`, enums (`E{Feature}Status`), `{Feature}Constraints`, value objects, pure domain rules | DTOs, HTTP status codes, configuration, SQL, attributes from ASP.NET, `Result<T>` |
-| **Application** | Inputs, validators, handlers, shared service interfaces, `Result<T>`/`Error`, DTOs, DTO mapping, repository ports, query filters | `HttpContext`, `IResult`, `IActionResult`, `Npgsql*`, connection strings, OpenBao, `ILogger` as a business dependency |
-| **Infrastructure** | Repository implementations, SQL text, row mapping, connection factory, OpenBao configuration provider | Business rules, validation, DTO-to-response mapping, HTTP concepts |
-| **Api** | Request/response contracts, `ToInput`, route groups, endpoint metadata, authentication/authorization, ProblemDetails, OpenAPI, JSON context, composition root | Business rules, SQL, direct `NpgsqlConnection` use, entity persistence |
-| **ServiceDefaults** | OpenTelemetry, health check defaults, host-level cross-cutting setup | Feature code, domain logic |
+- `AddServiceDefaults()` configures OpenTelemetry: logging, metrics (ASP.NET Core, HTTP client, runtime) and
+  traces (the app source, ASP.NET Core, HTTP client). The OTLP exporter is added only when
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is set, so tests and plain runs export nothing.
+- `/health` and `/alive` are excluded from traces (probe noise).
+- `AddDefaultHealthChecks()` adds the `self` check tagged `live`; `MapDefaultEndpoints()` maps `/health`
+  (aggregate) and `/alive` (the `live` tag). The API adds `api-health-check` (`/health/api`) and
+  `postgres-check` (`/health/postgresDb`) in `ConfigureServices`.
 
 ## Request lifecycle
 
-1. `Program.Main` creates a slim builder, loads `AppSettings`, calls `AddApiServices`, builds, configures the
-   pipeline, maps routes and runs.
-2. `ConfigureApplication` adds the exception handler, response compression, HTTPS redirection, status-code
-   pages, CORS, authentication and authorization, then maps OpenAPI and the route groups.
-3. A route group (`IGroupMap`) maps its `{Feature}Endpoints` methods with a policy. The endpoint adapter owns the
-   request → input → handler → response plumbing; the route group owns only templates and metadata.
-4. The request contract maps to an application input: `request.ToInput(currentUser.Owner)`. The owner always
-   comes from the token; `OwnerScope` decides `VisibleOwner`/`OwnerForCreate`/`FilterOwners`.
-5. The application handler calls `ValidationService.ExecuteAsync`, which runs the input's registered
-   `ValidatorSet<TInput>`. The set refuses an empty registration; a missing set fails at startup through
-   `ValidateOnBuild`. A validation failure becomes a `BadRequestError`; the action is skipped.
-6. The handler applies business rules, calls the repository port, and returns `Result<T>` with a `Dto`,
-   projection or an `Error`.
-7. `ApiResultExtensions` maps the result: success to `200`/`204`/`201`, failure to `400`/`401`/`403`/`404`/
-   `409` ProblemDetails. `ProblemDetailsFactory` builds the body (`type` = `https://httpstatuses.io/{status}`,
-   `traceId` extension); the mapper does not shape its own body.
-8. `GlobalExceptionHandler` catches unexpected exceptions and malformed JSON; `UseStatusCodePages` gives
-   unmatched routes and methods the same ProblemDetails contract.
+1. Kestrel receives the request. `Program` built the host with `CreateSlimBuilder`, `ValidateScopes` and
+   `ValidateOnBuild`, and `UseKestrelHttpsConfiguration()` (the slim builder leaves HTTPS wiring out).
+2. `ConfigureApplication` runs `UseExceptionHandler`, response compression, HTTPS redirection,
+   `UseStatusCodePages` (ProblemDetails for body-less 4xx/5xx), CORS, authentication and authorization.
+3. The route group's policy runs. `HasEmailClaim` rejects a token without `email` with 403.
+4. The request body is deserialized by the source-generated request delegate with the app's
+   `JsonSerializerOptions`, whose resolver chain starts with the feature contexts and then
+   `AppJsonSerializerContext` (ProblemDetails).
+5. `{Feature}Endpoints` builds the input: request mapping plus `ICurrentUser.Owner` (`OwnerForCreate`,
+   `VisibleOwner` or `FilterOwners`). The owner never comes from the body.
+6. The handler runs. `ValidationService.ExecuteAsync` validates through `ValidatorSet<TInput>`; a failure
+   returns `BadRequestError("Validation Errors", …)` and the action is skipped.
+7. The handler calls the port, maps the entity to a DTO and returns `Result<TDto>`.
+8. `ApiResultExtensions` maps success to the documented 2xx and every error type to its status;
+   `ProblemDetailsFactory` builds the body with `traceId`.
+9. The response is serialized through the feature's `JsonSerializerContext`.
 
-## Patterns and their reasons
+## Result and Error
 
-### Result and Error
+`Result<T>` is a value or a typed `Error`, never both:
 
-`Result<T>` and the `Error` hierarchy live in `Application/Results`, not Domain. A handler returns
-`Result<T>.Success(value)` or `Result<T>.Failure(new NotFoundError(...))`. The API chooses the HTTP status in
-`ApiResultExtensions.ResolveError`; every ProblemDetails body is built by `ProblemDetailsFactory`.
+```csharp
+Result<TodoDto>.Success(dto);
+Result<TodoDto>.Failure(new NotFoundError("ID was not found."));
+```
 
-Why: business failures are expected outcomes, not exceptional control flow; the translation to HTTP belongs to
-the API, so Application stays free of ASP.NET.
+`Error` subtypes and their HTTP mapping:
 
-Rules:
+| Error | Status |
+|---|---|
+| `BadRequestError`, `DomainError` | 400 |
+| `UnauthorizedError` | 401 |
+| `ForbiddenError` | 403 |
+| `NotFoundError` | 404 |
+| `ConflictError` | 409 |
 
-- Add a new error type only when it maps to a new HTTP status. Extend `ResolveError` (which delegates to
-  `ProblemDetailsFactory`) and the OpenAPI `ProducesProblem` metadata in the same change.
-- Do not throw for validation, not-found or conflict. Throw only for programmer errors (null where the
-  contract forbids it, impossible state).
-- Repositories return `Result<T>` when a database constraint is a business outcome (duplicate title/name);
-  otherwise `null` or `bool`.
+An unmapped subtype throws `ArgumentOutOfRangeException`, which the exception handler turns into a 500. Add a
+new subtype only when it maps to a new status, and update `ApiResultExtensions.ResolveError` in the same
+change.
 
-### Handler
+## Patterns and why
 
-- One handler per use case: `{Verb}{Feature}Handler` is `sealed`, lives next to its input and validator, and
-  implements `IHandler<TInput, TResult>`.
-- `IHandler<TInput, TResult>` exposes `Task<Result<TResult>> HandleAsync(TInput input, CancellationToken
-  cancellationToken)`. The `Result<T>` contract stays in the interface, so every use case has the same outcome
-  shape.
-- Handlers are registered explicitly by their closed generic interface; the route delegates inject
-  `IHandler<TInput, TResult>`.
-- Shared collaborators belong in `Application/Abstractions/Services`; persistence ports belong in
-  `Application/Abstractions/Repositories`; the caller context (`ICurrentUser`) belongs in
-  `Application/Abstractions/Identity`.
+**Handler per use case.** `IHandler<TInput, TResult>` plus `ValidationService` gives one place per use case,
+no mediator and no assembly scanning. A handler is a sealed class with a primary constructor.
 
-### Shared services
+**Validator set.** `ValidatorSet<TInput>` collects every registered `IValidator<TInput>`, refuses to be
+constructed empty and aggregates failures (parallel validators, duplicate messages removed). `AddUseCase`
+registers it, and `Program` builds every use case at startup, so a missing validator stops the host.
 
-- A service is a collaborator shared by several handlers, not a use case. Its interface lives in
-  `Application/Abstractions/Services`; its implementation lives next to the feature that owns it.
-- Extract a service only when a second handler needs the same behaviour. A single handler keeps the logic
-  in its `HandleAsync`.
-- The handler still owns validation, business outcomes and `Result<T>`; the service only provides the
-  shared behaviour.
-- Register the concrete service explicitly in `ConfigureServices`.
+**Ports in the feature.** `ITodoRepository` lives in `Application.Todo` because it speaks the feature's
+language. `Infrastructure.Todo.TodoRepository` implements it with ADO.NET; there is no EF Core, no Dapper and
+no generic repository.
 
-### Validation
+**ADO.NET by hand.** AOT forbids reflection-based mapping, and the template wants the SQL visible. Every
+column is mapped explicitly, every value is a bound parameter, every identifier comes from `{Feature}Table`.
 
-- Input shape: `AbstractValidator<TInput>` in Application, usually deriving from the feature's shared
-  `{Feature}Validator<TInput>`.
-- `BaseAbstractValidator<TRequest>` lives in `Application/Validation` and provides `NotNullNotEmpty`,
-  `ValidateUlid`, `ValidateDateTime`, `ValidateStartDateAndEndDate`, `ValidateSortBy`, `IsValidEmail` and
-  `AddFailure`.
-- `ValidatorSet<TInput>` (also `Application/Validation`) is the handler's validation dependency. Its
-  constructor refuses an empty `IEnumerable<IValidator<TInput>>`; `Program.Main` sets
-  `UseDefaultServiceProvider(ValidateOnBuild = true)`, so a handler with no registered set — or a set with
-  no validator — fails at startup instead of silently accepting unchecked input.
-- `ValidationService.ExecuteAsync` takes the `ValidatorSet<TInput>` and returns the aggregated failures as
-  `BadRequestError`.
-- Uniqueness, ownership and state transitions are **business rules** in the handler, because they need the
-  repository and can become `ConflictError`/`NotFoundError`.
+**Explicit DI.** `ConfigureServices` calls one module per feature; modules call `AddUseCase<…>()`. A new
+service is a new registration, never a convention. `ValidateOnBuild` catches a missing dependency of a
+registered service; `ValidateUseCases` catches a handler whose validator set is empty.
 
-Why no validation decorators or MediatR: the template keeps the call path explicit and AOT-safe. A handler
-inherits `ValidationService`; there is no pipeline, no assembly scan and no dynamic dispatch.
+**JSON source generation.** Each feature has a `{Feature}JsonSerializerContext`; `AppJsonSerializerContext`
+holds the shared ProblemDetails. The contexts are chained in `ConfigureHttpJsonOptions`. A contract missing
+from the context fails the `JsonContractTests` unit test and, at runtime, the AOT binary.
 
-### Repository
-
-- The port (`I{Feature}Repository`) and the query filter (`{Feature}Filter`) live in Application.
-- The adapter (`{Feature}Repository`) lives in Infrastructure, uses `INpgsqlConnectionFactory` and plain
-  `NpgsqlCommand`/`NpgsqlDataReader`.
-- Every row is mapped manually (`Map{Feature}`), in the exact column order of the shared `{Feature}Columns`
-  constant.
-- A connection is created, opened and disposed per operation; Npgsql pools underneath.
-- There is no EF Core, no Dapper, no expression trees, no reflection mapping. This is deliberate: Native AOT
-  and predictable SQL.
-
-### DTO, projection and response mapping
-
-- Entity → DTO: `Application/Dtos/{Feature}/{Feature}DtoExtensions.ToDto`, internal to Application.
-- Partial projection: when a query selects only some fields, define `{Projection}` in
-  `Application/{Feature}/Projections`, return it from the port and carry it through the handler. Do not return
-  a partially filled entity/DTO and do not narrow it again with `!` casts at the response edge. The template's
-  `TodoTitle` is the worked example.
-- DTO/projection → response: `Api/Models/Responses/{Feature}/{Feature}Response.ToResponseModel`, through
-  `IBaseResponse<TDto, TResponse>`.
-- The API never returns an entity or a DTO directly; the response type is the public contract and the OpenAPI
-  schema.
-
-### Composition root
-
-`Api/ConfigureServices.cs` is the only place that knows concrete Application and Infrastructure types. It
-registers validators, one `ValidatorSet<TInput>` per input, handlers and repositories one by one.
-`Api/Extensions/EndpointExtension.cs` registers each `IGroupMap` with `TryAddEnumerable`. There is no assembly
-scanning, because the AOT analyzer must see every type statically. `ValidateOnBuild` turns a missing
-`ValidatorSet<T>` registration into a startup failure.
-
-### Current user
-
-`ICurrentUser` (`Application/Abstractions/Identity`) exposes `Email`, `IsAdmin` and `OwnerScope Owner`.
-`HttpContextCurrentUser` (Api) reads the claims from `IHttpContextAccessor` and builds the value with
-`new(Email, IsAdmin)`. `OwnerScope` is a value type, not a nullable string:
-
-- `VisibleOwner` is `null` for admins and the email for everyone else (read/filter/delete scope).
-- `OwnerForCreate` is always the caller's email, even for admins.
-- `FilterOwners(requested)` keeps the requested owners for admins and pins everyone else to their email.
-
-Application code consumes `OwnerScope`; it never reads claims or `HttpContext`.
-
-### Configuration
-
-`AppSettings` is bound manually in `AppConfigurationHelper.LoadAppSettings` (no reflection binder). A section
-class derives from `SectionBase` and its name must end in `Section` (`ConnectionStringsSection` →
-`ConnectionStrings`). `AppSettingsValidator` fails startup with a clear message.
-
-### Secrets
-
-`AppSettings` holds no secret. OpenBao is a configuration source added by
-`Infrastructure/Secrets/OpenBaoConfigurationExtensions.AddOpenBaoSecrets`; the API reads `API_KEY` from it in
-Symmetric mode. The AppHost seeds the store with `openbao-init`; the application only receives `OpenBao:*`
-(address, token, mount, path), never the secret values as environment variables.
-
-### Native AOT
-
-The API declares `PublishAot`, `IsAotCompatible`, `EnableAotAnalyzer`, `EnableRequestDelegateGenerator` and
-`GenerateDocumentationFile`. JSON goes through `AppJsonSerializerContext`; OpenAPI is shaped by static
-descriptors; request delegates are source-generated. See `native-aot.md`.
+**Owner scope as a value type.** `OwnerScope` turns "who is calling" into the three questions the code needs:
+what may I see (`VisibleOwner`), who owns what I create (`OwnerForCreate`) and which owners may I filter
+(`FilterOwners`). The rule lives in one type instead of in every mapper.
 
 ## Where does this code go?
 
-| You are adding... | Layer | Folder |
+| You are adding | Layer | Folder |
 |---|---|---|
-| A new field with validation | Domain (constraint/entity) + Application (input/validator) + API (request/response) + SQL | `Domain/Models`, `Application/{Feature}/Handlers/{Verb}`, `Api/Routes/{Feature}/{Verb}` |
-| A new business rule that needs the database | Application handler | `Application/{Feature}/Handlers/{Verb}/{Verb}{Feature}Handler.cs` |
-| Shared behaviour used by several handlers | Application service | `Application/Abstractions/Services` (interface), implementation next to the feature |
-| A new SQL query | Application port + Infrastructure repository | `Application/Abstractions/Repositories`, `Infrastructure/Repositories/{Feature}` |
-| A new endpoint over an existing handler | API only | `Api/Routes/{Feature}/{Feature}Endpoints.cs`, `{Feature}Routes.cs` |
-| A new status code | Application `Error` + `ApiResultExtensions.ResolveError` + OpenAPI metadata | `Application/Results/Error.cs`, `Api/Extensions/ApiResultExtensions.cs` |
-| A new sort key | Application sort catalog + Infrastructure column map + alignment test | `Application/{Feature}/Sorting`, `Infrastructure/Repositories/{Feature}/Helpers` |
-| A partial read projection | Application projection type + port + handler + response | `Application/{Feature}/Projections`, `Api/Models/Responses/{Feature}` |
-| A new external service | Infrastructure adapter + Application port | `Infrastructure/{Concern}`, `Application/Abstractions/Services` |
-| A new configuration value | API `AppSettings` + validator + appsettings + AppHost | `Api/Configuration`, `local/aspire` |
-| A new secret | OpenBao initializer + AppHost + docs | `local/aspire`, `local/local-development.md` |
-| A new database table | SQL script + Infrastructure repository + tests | `local/database`, `Infrastructure/Repositories` |
-| A new cross-cutting host concern | ServiceDefaults or API pipeline | `src/{App}.ServiceDefaults`, `Api/ConfigureApplication.cs` |
+| An entity, enum, business limit | Domain | `Domain/{Feature}` |
+| A use case, its input and validator | Application | `Application/{Feature}/{UseCase}` |
+| A query the database must answer | Application | `Application/{Feature}` as a port method, or a filter record |
+| A read model returned by the API | Application | `Application/{Feature}` as `{Feature}Dto` |
+| A partial read for a projection endpoint | Application | `Application/{Feature}` as `{Thing}` record |
+| A sort vocabulary | Application | `Application/{Feature}/{Feature}SortCatalog.cs` |
+| A SQL query, table constant, sort-column map | Infrastructure | `Infrastructure/{Feature}` |
+| A route, endpoint adapter, request, response | Api | `Api/{Feature}` |
+| A JSON context for the feature | Api | `Api/{Feature}/{Feature}JsonSerializerContext.cs` |
+| OpenAPI schema descriptions for the feature | Api | `Api/{Feature}/{Feature}OpenApiSchemas.cs` |
+| A shared HTTP helper (ProblemDetails, Result mapping, route groups) | Api | `Api/Common`, `Api/Extensions` |
 
-## Common mistakes
-
-- Putting `Result<T>` or `HttpStatusCode` in Domain.
-- Referencing `Microsoft.AspNetCore.*` from Application to reuse `IResult`.
-- Using EF Core, Dapper or a mapper library because it is faster to write.
-- Registering handlers or validators with assembly scanning or `AddValidatorsFromAssembly`.
-- Reading `HttpContext` or claims in Application.
-- Accepting `createdBy`/`owner` from the request body.
-- Treating `OwnerScope` as a nullable string instead of using `VisibleOwner`/`OwnerForCreate`/`FilterOwners`.
-- Building SQL with string interpolation of user input.
-- Adding a sort key without the feature catalog and the SQL map; the alignment test must fail until both agree.
-- Returning a partially filled entity/DTO and hiding the missing fields with `!` casts; add a projection type.
-- Taking `IEnumerable<IValidator<T>>` in a handler instead of `ValidatorSet<T>`; an empty set no longer means
-  "valid".
-- Adding repository helpers for a second feature without generalizing the hardcoded `Todo.Helpers` condition in
-  `StructureTests`; the architecture test fails even though the layout is correct.
-- Forgetting `AppJsonSerializerContext` (the endpoint compiles but fails at runtime under AOT).
-- Forgetting the OpenAPI schema descriptor (the document loses descriptions and formats).
-- Suppressing an AOT warning instead of fixing the cause.
-- Adding a package without checking its AOT/trimming annotations.
+If a type does not fit, the question is usually "which layer owns the concept", not "where can it compile".

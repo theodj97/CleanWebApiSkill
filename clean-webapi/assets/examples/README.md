@@ -1,110 +1,50 @@
-# Worked example: Project
+# Worked example: the `Project` feature
 
-A complete second feature, independent of the template's `Todo` sample. It demonstrates every pattern a feature
-needs: create, read by id and filter, with validation, ownership, a unique name per owner, an ADO.NET
-repository, a schema script, a seed and tests at every level.
+A second complete feature, mirroring the template's layout. Use it when the `Todo` sample is gone, has been
+modified, or when you need an independent reference. Every file uses `CleanWebApiTemplate` names, so
+`dotnet new` rewrites them like the rest of the template.
 
-`{App}` is the root namespace. Replace it with the solution name (`Contoso.Orders`) and `Project` with the real
-feature. The example assumes the template's shared types exist:
+## What it contains
 
-- `BaseEntity<TKey>` in Domain.
-- `IHandler<TInput, TResult>`, `BaseAbstractValidator<T>`, `ValidationService`, `ValidatorSet<T>`,
-  `Result<T>`, `Error` and the error records in Application.
-- `ICurrentUser` and `OwnerScope` in `Application/Abstractions/Identity`.
-- `IBaseResponse<TDto, TResponse>` in Api.
-- The test fixtures, attributes, builders, `TestData`, `Eventually` and the test repository in `Tests.Shared`.
+| Path | Content |
+|---|---|
+| `src/CleanWebApiTemplate.Domain/Project` | `ProjectEntity`, `EProjectStatus` (Draft, Active, Completed, Archived), `ProjectConstraints` |
+| `src/CleanWebApiTemplate.Application/Project` | Port, DTO, mapping, filter, name projection, sort catalog, shared validator, and one folder per use case (create, get by id, filter, update, delete, names) |
+| `src/CleanWebApiTemplate.Infrastructure/Project` | `ProjectTable`, `ProjectSortColumns`, `ProjectRepository` |
+| `src/CleanWebApiTemplate.Api/Project` | Module, routes, endpoint adapter, requests, responses, JSON context, OpenAPI schemas |
+| `tests/CleanWebApiTemplate.UnitTests` | Handler and validator tests, sort alignment, request mapping, JSON contract |
+| `tests/CleanWebApiTemplate.Api.ComponentTests/Project` | Endpoints, filter, ownership, authorization matrix, repository, validation |
+| `tests/CleanWebApiTemplate.Api.FunctionalTests/Project` | Lifecycle flow, authentication |
+| `tests/CleanWebApiTemplate.Tests.Shared/Data` | `ProjectBuilder`, `ProjectTestRepository` |
+| `local/database` | `0002__projects_schema.sql`, `seed/0002__projects.sql` |
+| `local/openapi` | `examples.json` entries and the `bodies/` and `responses/` files |
 
-Do not copy the `Todo` feature into the generated project. Copy these files in layer order and adapt the
-names. The destination paths are the ones in `../../references/feature-slice.md`; for example,
-`application/ProjectDto.cs` → `src/{App}.Application/Dtos/Project/ProjectDto.cs`,
-`application/CreateProjectHandler.cs` →
-`src/{App}.Application/Project/Handlers/Create/CreateProjectHandler.cs` and
-`infrastructure/ProjectRepository.cs` → `src/{App}.Infrastructure/Repositories/Project/ProjectRepository.cs`.
+## How to copy it
 
-The tests use the template's role identities (`TodoUser`, `TodoOperator`, `TodoExternal`). If the sample is
-removed and those identities are renamed, use the role identities that exist; keep one identity per role and
-the two negative cases.
+1. Copy the three trees over the repository root, keeping the paths:
 
-## Files
+   ```bash
+   cp -r assets/examples/src/.  <repo>/src/
+   cp -r assets/examples/tests/. <repo>/tests/
+   cp -r assets/examples/local/. <repo>/local/
+   ```
 
-```text
-assets/examples/
-├── domain/
-│   ├── ProjectEntity.cs
-│   ├── EProjectStatus.cs
-│   └── ProjectConstraints.cs
-├── application/
-│   ├── Abstractions/
-│   │   └── Repositories/
-│   │       └── IProjectRepository.cs
-│   ├── ProjectDto.cs
-│   ├── ProjectDtoExtensions.cs
-│   ├── ProjectValidator.cs
-│   ├── ProjectFilter.cs
-│   ├── ProjectSortCatalog.cs
-│   ├── CreateProjectInput.cs
-│   ├── CreateProjectInputValidator.cs
-│   ├── CreateProjectHandler.cs
-│   ├── GetProjectByIdInput.cs
-│   ├── GetProjectByIdInputValidator.cs
-│   ├── GetProjectByIdHandler.cs
-│   ├── FilteredProjectInput.cs
-│   ├── FilteredProjectInputValidator.cs
-│   └── FilteredProjectHandler.cs
-├── infrastructure/
-│   ├── ProjectTable.cs
-│   ├── ProjectSortColumns.cs
-│   └── ProjectRepository.cs
-├── api/
-│   ├── CreateProjectRequest.cs
-│   ├── FilteredProjectRequest.cs
-│   ├── ProjectResponse.cs
-│   ├── ProjectOpenApiSchemas.cs
-│   ├── ProjectEndpoints.cs
-│   ├── ProjectRoutes.cs
-│   └── registration.md
-├── database/
-│   ├── 0002__projects.sql
-│   └── seed/0002__projects.sql
-├── local/
-│   └── openapi-examples.md
-└── tests/
-    ├── CreateProjectInputValidatorTests.cs
-    ├── CreateProjectHandlerTests.cs
-    ├── ProjectSortColumnsTests.cs
-    ├── ProjectBuilder.cs
-    ├── ProjectTestRepository.cs
-    ├── FixtureRegistration.md
-    ├── ProjectEndpointsTests.cs
-    ├── ProjectAuthorizationMatrixTests.cs
-    ├── ProjectLifecycleFlowTests.cs
-    ├── ProjectResponseDto.cs
-    └── ProjectArchitectureTests.md
-```
+2. Apply the four registrations in `FixtureRegistration.md`.
+3. Add `services.AddProjectModule();` to `Api/ConfigureServices.cs` (next to `AddTodoModule()`).
+4. Merge the `operations` object of `local/openapi/examples.json` into the repository catalog. If the
+   repository still has the Todo sample, both features share the catalog.
+5. Update `tests/CleanWebApiTemplate.Api.ComponentTests/OpenApiContractTests.cs`: the operation-id set and the
+   per-path status assertions are exact, so a new feature makes `Document_ContainsEveryTodoOperation` fail
+   until the expected list includes the new operations.
+6. Build, run the tests and start Aspire (`aspire start`) to try the examples.
 
-`local/openapi-examples.md` is the executable catalog for the feature: seed-consistent bodies, a `parameters`
-array for route ids and response examples. The catalog contract and the local verification loop are in
-`../../references/local-swagger.md`.
+## Notes
 
-## What is intentionally omitted
-
-- Update and delete. They follow the same shape as create/get: `UpdateProjectInput` + validator + handler,
-  `DeleteProjectInput` + validator + handler, `PatchFields`, an owner-scoped repository update/delete and the
-  `Operator` policy for delete. The touch list in `../../references/feature-slice.md` covers them.
-- The titles/projection endpoint. It is the same read path with a projection type in
-  `Application/{Feature}/Projections` (for example `ProjectTitle`) and a `ProjectTitleResponse`. Do not fill a
-  partial `ProjectDto` and cast it later.
-- A new AppHost resource. A table in the existing database needs no AppHost change; only `db-init`'s readiness
-  query must keep referencing a table that exists.
-
-## Copy order
-
-1. Domain.
-2. Application (input → validator → port/filter → sort catalog → DTO → handler).
-3. Infrastructure (table → sort columns → repository).
-4. Database (schema → seed).
-5. API (request/response → endpoint adapter → schemas → route group → registration).
-6. Local (OpenAPI examples) and run the local Swagger check.
-7. Tests (builder/repository → fixture → unit → sort alignment → component → functional → architecture).
-   Update `ComponentTests/OpenApiContractTests.cs` too: it asserts the exact operation-id set.
-8. Docs (README API table) and gates.
+- The tests use the template's role identities (`TestUser.TodoUser`, `TodoOperator`, `TodoAdmin`,
+  `TodoExternal`). They are role-based, not feature-based; rename them in `TestUser`/`TestUsers` only if the
+  whole repository renames the sample identities.
+- `Fixture.Projects` is added by `FixtureRegistration.md`; until then the component tests do not compile.
+- The unique index is `UX_Project_CreatedBy_Name` and the repository only maps **that** constraint to a
+  conflict.
+- The name is unique per owner: two owners may use the same name.
+- The filter exposes `names`, `statuses` and `owners`; the projection route is `POST /api/projects/names`.

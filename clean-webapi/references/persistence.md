@@ -1,203 +1,204 @@
 # Persistence
 
-PostgreSQL through Npgsql and plain ADO.NET. There is no EF Core, no Dapper and no reflection-based mapping;
-that is a deliberate Native AOT decision, not a gap to fill.
+PostgreSQL through Npgsql, hand-written ADO.NET, one data source per process. This reference covers the
+repository, the SQL scripts and the test data access.
 
-## Schema source of truth
+## NpgsqlDataSource
 
-- `local/database/*.sql` is the schema. `db-init` applies every file in ordinal order, each in a transaction,
-  on every AppHost start. There are no migrations and no history table.
-- `local/database/seed/*.sql` is the Local-mode seed. Tests start from the schema only and insert their own
-  data.
-- The database is ephemeral: the container is removed when the AppHost stops. Never add a volume, a bind mount
-  or a persistent lifetime.
-- The application never creates or migrates the schema. A deployed environment owns its schema.
-
-Script naming:
-
-```text
-local/database/0001__initial_schema.sql
-local/database/0002__projects.sql
-local/database/seed/0001__todos.sql
-local/database/seed/0002__projects.sql
-```
-
-`DbInitializer` orders by `StringComparer.Ordinal`, so zero-pad the number. It fails when the schema directory
-has no `*.sql`; a seed directory with no files is skipped.
-
-## Table design
-
-Use the shape the template establishes:
-
-```sql
-CREATE TABLE IF NOT EXISTS "Project" (
-    "Id"          bytea       NOT NULL,
-    "Name"        text        NOT NULL,
-    "Description" text        NULL,
-    "CreatedAt"   timestamptz NOT NULL,
-    "UpdatedAt"   timestamptz NOT NULL,
-    "Status"      integer     NOT NULL,
-    "CreatedBy"   text        NOT NULL,
-    "UpdatedBy"   text        NOT NULL,
-    CONSTRAINT "PK_Project" PRIMARY KEY ("Id")
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS "UX_Project_CreatedBy_Name"
-    ON "Project" ("CreatedBy", "Name");
-
-CREATE INDEX IF NOT EXISTS "IX_Project_CreatedAt" ON "Project" ("CreatedAt");
-```
-
-- `Id bytea` holds a 16-byte ULID (`Ulid.ToByteArray()` / `new Ulid(bytes)`). Do not use `uuid` or `text`.
-- Timestamps are `timestamptz` and always written as UTC.
-- The status is `integer`; the application enum is the source of the allowed values.
-- The unique index encodes the business rule the handler also pre-checks; it closes the race between the
-  pre-check and the insert.
-- Name indexes after the rule: `UX_{Table}_{Columns}`, `IX_{Table}_{Column}`, `PK_{Table}`.
-
-## Table and sort metadata
-
-`Infrastructure/Repositories/{Feature}/Helpers/{Feature}Table.cs`:
+`ConfigureServices` registers one singleton for the process:
 
 ```csharp
-public static class ProjectTable
+services.AddSingleton(_ => NpgsqlDataSource.Create(connectionString));
+```
+
+The repository receives it and opens a connection per operation:
+
+```csharp
+public sealed class TodoRepository(NpgsqlDataSource dataSource) : ITodoRepository
 {
-    public const string Name = "Project";
+    private readonly NpgsqlDataSource dataSource = dataSource;
+
+    public async Task<TodoEntity?> GetByIdAsync(Ulid id, string? visibleOwner = null, CancellationToken ct = default)
+    {
+        await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(ct);
+        await using var command = new NpgsqlCommand(sql, connection);
+        // bind, execute, map
+    }
+}
+```
+
+The data source owns the pool. Do not build a connection string per call, do not cache a connection, do not
+share one across requests. The connection string comes from OpenBao (see `configuration-and-secrets.md`).
+
+## The table helper
+
+`{Feature}Table` is the single source of the identifiers:
+
+```csharp
+public static class TodoTable
+{
+    public const string Name = "Todo";
     public const string IdColumn = "Id";
-    public const string NameColumn = "Name";
-    public const string DescriptionColumn = "Description";
-    public const string CreatedAtColumn = "CreatedAt";
-    public const string UpdatedAtColumn = "UpdatedAt";
-    public const string StatusColumn = "Status";
-    public const string CreatedByColumn = "CreatedBy";
-    public const string UpdatedByColumn = "UpdatedBy";
+    public const string TitleColumn = "Title";
+    // … one per column
+    public const string UniqueTitleIndexName = "UX_Todo_CreatedBy_Title";
+    public const string PrimaryKeyName = "PK_Todo";
 
-    public const string UniqueNameIndexName = "UX_Project_CreatedBy_Name";
+    public static readonly IReadOnlyList<string> Columns = [IdColumn, TitleColumn, …];
 }
 ```
 
-`Application/{Feature}/Sorting/{Feature}SortCatalog.cs` owns the **accepted sort keys** and the description
-used by OpenAPI:
+- The repository builds its column list from `Columns`, so the schema and the mapper cannot drift on names.
+- The `Map{Feature}` method relies on the order of `Columns`. Changing the order means changing the mapper.
+- The unique index name is part of the contract: the repository only maps **that** violation to a conflict.
+
+## Fixed SQL, bound values
 
 ```csharp
-public static class ProjectSortCatalog
-{
-    public static readonly IReadOnlyList<string> Keys =
-        [nameof(ProjectDto.Id), nameof(ProjectDto.Name), nameof(ProjectDto.Description),
-         nameof(ProjectDto.CreatedAt), nameof(ProjectDto.UpdatedAt), nameof(ProjectDto.Status),
-         nameof(ProjectDto.CreatedBy), nameof(ProjectDto.UpdatedBy)];
+private const string DuplicateTitleMessage = "A Todo with this title already exists for this owner.";
 
-    public static IReadOnlySet<string> KeySet { get; } =
-        new HashSet<string>(Keys, StringComparer.OrdinalIgnoreCase);
+private static readonly string SelectByIdSql =
+    $"SELECT {TodoColumns} FROM \"{TodoTable.Name}\" WHERE \"{TodoTable.IdColumn}\" = @id;";
 
-    public static string Describe() =>
-        string.Join(", ", Keys.Select(key => char.ToLowerInvariant(key[0]) + key[1..]));
-}
+private static readonly string InsertSql = $"""
+    INSERT INTO "{TodoTable.Name}" ({TodoColumns})
+    VALUES (@id, @title, @description, @createdAt, @updatedAt, @status, @createdBy, @updatedBy);
+    """;
 ```
 
-`Infrastructure/Repositories/{Feature}/Helpers/{Feature}SortColumns.cs` maps the same keys to the physical
-columns with an ordinal-ignore-case dictionary. Only keys in this map can reach `ORDER BY`; the direction is a
-`bool`, never raw text. `{Feature}SortColumnsTests` asserts
-`{Feature}SortCatalog.KeySet.SetEquals({Feature}SortColumns.Map.Keys)`, so the validator's friendly `400` and
-the SQL column map cannot drift. A new sortable field edits the catalog and the map, then fails the test until
-both agree.
+Rules:
 
-## Repository rules
+- Identifiers are compile-time constants. Values are `command.Parameters.Add(name, NpgsqlDbType.X).Value`.
+- IN lists: one parameter per element (`@p0, @p1, …`), never string concatenation. See
+  `AppendInCondition`.
+- Contains: `ILIKE @p ESCAPE '\'` with `%…%`, and escape `\`, `%` and `_` in the input.
+- Date range: both bounds or none; `timestamp with time zone` values go through `ToUtc` (Unspecified is
+  treated as UTC, Local is converted). Npgsql refuses a non-UTC `DateTime` for `timestamptz`.
+- Paging: `LIMIT @pageSize OFFSET @offset` only when both values are present; below 1 throws
+  `ArgumentOutOfRangeException` (the validator already rejects that).
+- Sorting: resolve the key through `{Feature}SortColumns.Map` (case-insensitive) and emit the column plus
+  `ASC`/`DESC` from the boolean. A blank key or an unknown key throws `ArgumentException`.
 
-- One connection per operation: `using var connection = connectionFactory.CreateConnection(); await
-  connection.OpenAsync(cancellationToken);`.
-- Fixed SQL text is built once from `{Feature}Table` constants (static readonly fields). Values are always
-  `NpgsqlParameter`s with an explicit `NpgsqlDbType`.
-- Dynamic filters append `column IN (@p0, @p1, ...)` with one parameter per value. The column name comes from a
-  constant, never from input.
-- Text search uses `ILIKE @p ESCAPE '\'` and escapes `\`, `%` and `_`.
-- The date range applies only when both bounds are present; convert to UTC (`DateTime.SpecifyKind`/`ToUniversalTime`)
-  before sending a `TimestampTz`.
-- Paging appends `LIMIT @pageSize OFFSET @offset`; validate page number/size before calling.
-- Sorting resolves through `{Feature}SortColumns` after the validator accepts the key through
-  `{Feature}SortCatalog`; unknown keys throw `ArgumentException`, which the validator should have caught.
-- Row mapping is manual, in the exact `{Feature}Columns` order, with `IsDBNull` checks for every nullable
-  column.
-- Return `Result<T>` for a constraint violation that is a business outcome; return `null`/`false` for a row
-  that does not exist.
+## Mapping
 
-Unique violation:
+`Map{Feature}` reads by ordinal and checks `IsDBNull` on every column:
 
 ```csharp
-catch (PostgresException exception) when (exception.SqlState == PostgresErrorCodes.UniqueViolation)
+private static TodoEntity MapTodo(NpgsqlDataReader reader) => new()
 {
-    return Result<ProjectEntity>.Failure(
-        new ConflictError("A project with this name already exists for this owner."));
-}
+    Id = reader.IsDBNull(0) ? Ulid.Empty : new Ulid(reader.GetFieldValue<byte[]>(0)),
+    Title = reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
+    CreatedAt = reader.IsDBNull(3) ? default : reader.GetDateTime(3),
+    Status = reader.IsDBNull(5) ? ETodoStatus.Pending : (ETodoStatus)reader.GetInt32(5),
+    // …
+};
 ```
 
-Do not catch `PostgresException` broadly; a connection failure or a syntax error is not a conflict.
+- `Ulid` is stored as `bytea` (16 bytes): `Ulid.ToByteArray()` on write, `new Ulid(byte[])` on read.
+- `ETodoStatus` is stored as `integer`: `(int)entity.Status` on write, `(ETodoStatus)reader.GetInt32(i)` on
+  read.
+- `timestamptz` maps to `DateTime` with `Kind = Utc`.
+- There is no reflection and no convention-based mapping: AOT and explicitness require the manual map.
 
-## Query filter
-
-`Application/{Feature}/Handlers/Queries/{Feature}Filter.cs` is the persistence-neutral query shape:
+## Unique index and conflicts
 
 ```csharp
-public sealed record ProjectFilter
+catch (PostgresException exception) when (IsDuplicateTitle(exception))
 {
-    public IReadOnlyList<Ulid>? Ids { get; init; }
-    public IReadOnlyList<string>? Names { get; init; }
-    public IReadOnlyList<int>? Statuses { get; init; }
-    public IReadOnlyList<string>? CreatedBys { get; init; }
-    public DateTime? StartDate { get; init; }
-    public DateTime? EndDate { get; init; }
-    public int? PageNumber { get; init; }
-    public int? PageSize { get; init; }
-    public IEnumerable<KeyValuePair<string, bool>>? SortProperties { get; init; }
+    return Result<TodoEntity>.Failure(new ConflictError(DuplicateTitleMessage));
+}
+
+private static bool IsDuplicateTitle(PostgresException exception) =>
+    exception.SqlState == PostgresErrorCodes.UniqueViolation
+    && exception.ConstraintName == TodoTable.UniqueTitleIndexName;
+```
+
+The `ConstraintName` check matters: without it, a primary-key collision would be reported as a duplicate
+title. The handler still pre-checks uniqueness to return a friendly conflict; the index protects the race.
+Do not catch `PostgresException` broadly and do not use exceptions for expected outcomes elsewhere.
+
+## Sort catalog and sort columns
+
+Application owns the accepted vocabulary, Infrastructure the physical map:
+
+```csharp
+// Application/Todo/TodoSortCatalog.cs
+public static readonly IReadOnlyList<string> Keys = [nameof(TodoDto.Id), …, nameof(TodoDto.UpdatedBy)];
+public static IReadOnlySet<string> KeySet { get; } = new HashSet<string>(Keys, StringComparer.OrdinalIgnoreCase);
+public static string Describe() => string.Join(", ", Keys.Select(key => char.ToLowerInvariant(key[0]) + key[1..]));
+
+// Infrastructure/Todo/TodoSortColumns.cs
+public static readonly IReadOnlyDictionary<string, string> Map =
+    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+    {
+        [nameof(TodoEntity.Id)] = TodoTable.IdColumn,
+        // …
+    };
+```
+
+`TodoSortColumnsTests` (unit) asserts both name the same keys, case-insensitively. The validator and the
+OpenAPI description read `TodoSortCatalog`; the repository reads `TodoSortColumns`.
+
+## Projections
+
+A partial read is a positional record (`TodoTitle(Ulid Id, string Title)`) returned by a dedicated port
+method. Its SQL selects only the needed columns and maps them explicitly. Do not return the entity and hide
+fields in the response; the projection is the contract.
+
+## SQL scripts
+
+`local/database/*.sql` (schema) and `local/database/seed/*.sql` (seed) are applied by
+`CleanWebApiTemplate.DbInitializer` in **ordinal order**, one transaction per file.
+
+- Names: `0001__initial_schema.sql`, `0002__projects_schema.sql`, `0001__todos.sql`, `0002__projects.sql`.
+- Schema scripts use `IF NOT EXISTS` and are safe to re-run.
+- Forward-only: never edit a deployed script. A change to an existing table is a new higher-numbered script.
+- The local database is ephemeral (no volume): every `aspire start` recreates it from scratch.
+- `db-init` exits 0 when at least one table exists in `public`; it does not name a feature table.
+- The seed runs only when the AppHost passes `Seed__Path`, which happens in Local mode only. Tests start from
+  the schema with no rows.
+- Seed rows use fixed ULID bytes (`decode('018f…', 'hex')`) and `ON CONFLICT ("Id") DO NOTHING`, so a script
+  can be re-applied.
+
+## Transactions
+
+There is no unit of work and no shared connection. Each port method opens and closes its connection. A use
+case that must change several rows atomically adds an explicit port method that performs the statements in one
+transaction inside the repository:
+
+```csharp
+await using NpgsqlConnection connection = await dataSource.OpenConnectionAsync(ct);
+await using NpgsqlTransaction transaction = await connection.BeginTransactionAsync(ct);
+// commands with command.Transaction = transaction
+await transaction.CommitAsync(ct);
+```
+
+Do not leak a transaction, a connection or a command outside Infrastructure.
+
+## Test data access
+
+`tests/CleanWebApiTemplate.Tests.Shared/Data/{Feature}TestRepository.cs` wraps the real repository over its
+own `NpgsqlDataSource`:
+
+```csharp
+public sealed class TodoTestRepository : IAsyncDisposable
+{
+    private readonly NpgsqlDataSource _dataSource;
+    private readonly ITodoRepository _repository;
+
+    public TodoTestRepository(string connectionString)
+    {
+        _dataSource = NpgsqlDataSource.Create(connectionString);
+        _repository = new TodoRepository(_dataSource);
+    }
+
+    public Task<TodoEntity?> FindAsync(Ulid id) =>
+        _repository.GetByIdAsync(id, cancellationToken: TestCancellation.Token);
+
+    public ValueTask DisposeAsync() => _dataSource.DisposeAsync();
 }
 ```
 
-The API request uses `string[]`/`string?`; `FilteredProjectInput.ToFilter()` parses ULIDs and dates with
-`CultureInfo.InvariantCulture` and `DateTimeStyles.RoundtripKind`.
-
-## Seed
-
-- The seed is synthetic and local-only. It must make every endpoint work with the devtoken profiles.
-- Use the same emails as `local/tools/devtoken.json` and `local/openapi/users.json`; roles and ownership must
-  match.
-- Cover every state the endpoints accept (for example one Draft, one Active, one Completed).
-- Keep ids stable and readable: `decode('018f0c2a000000000000000000000001', 'hex')` is a valid 16-byte ULID
-  payload.
-- Do not insert data that violates a unique index; the seed runs on every start, not once.
-- Document the seed coverage in `local/local-development.md` when the feature has non-obvious states.
-
-## Test data
-
-- `{Feature}Builder` in `Tests.Shared/Data` supplies valid defaults and states only what the test cares about.
-  Use `TestData.Unique("project")` for unique columns and `TestData.CreateFaker()` for deterministic random
-  values.
-- `{Feature}TestRepository` wraps the real repository over the test connection string:
-  `AddAsync` (throws on failure), `TryAddAsync` (returns the result for conflict assertions), `FindAsync`,
-  `FindByNameAsync`, `CountAsync`.
-- Register it on the fixture after the connection string is known:
-  `Projects = new ProjectTestRepository(connectionString);`.
-- A new table in the same database needs no new resetter name. `RespawnDatabaseResetter` reads the table graph
-  after the schema exists and resets every table. Add a name to `DatabaseResetConfiguration.Names` only for a
-  new **database**.
-- `DatabaseResetConfiguration.TablesToIgnore` is for tables nobody writes during tests (migration history,
-  reference data seeded with the schema). A table the tests write to is reset like any other.
-- `[ResetDatabase]` runs **before** the test, so a failed test leaves its data for inspection.
-
-## Connection factory
-
-`INpgsqlConnectionFactory` is registered as a singleton with the connection string from
-`AppSettings.ConnectionStrings.Postgres`. Npgsql pools the underlying connections per connection string.
-Repositories are scoped; they take the factory, not the connection string.
-
-## Checklist
-
-- [ ] Schema script applies from an empty database and is idempotent enough for a fresh container.
-- [ ] Unique index name matches `{Feature}Table.Unique...IndexName`.
-- [ ] Every query is parameterised; table/column names come from constants.
-- [ ] Sort catalog and column map match; a unit test proves it.
-- [ ] Row mapping covers every column with `IsDBNull`.
-- [ ] ULIDs are `bytea`; timestamps are UTC `timestamptz`.
-- [ ] Unique violation maps to `ConflictError`, not `500`.
-- [ ] Seed covers the states and uses the devtoken emails/roles.
-- [ ] Test repository and builder exist; fixture property registered.
-- [ ] `db-init` readiness query still references a table that exists.
+Tests arrange with `AddAsync`/builders and assert with `FindAsync`/`FindByTitleAsync`/`CountAsync`. They
+never issue raw SQL and never hardcode ids. Respawn reads the table graph after the schema exists, so a new
+table is reset automatically; a new database gets a new reset name in `DatabaseResetConfiguration`.

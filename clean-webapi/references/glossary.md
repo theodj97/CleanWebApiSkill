@@ -1,212 +1,170 @@
-# Glossary and decisions
+# Glossary: technical vocabulary
 
-The vocabulary an agent should use when talking about this repository. The decisions are the "why" that the
-code alone does not show; treat them as ADR summaries.
+The domain language lives in `GLOSSARY.md` at the repository root. This file defines the technical words the
+architecture uses, so a review and a handler name the same concept the same way.
 
-## Vocabulary
+## Layers and composition
 
-| Term | Meaning |
-|---|---|
-| **App** (`{App}`) | The solution name and root namespace, for example `Contoso.Orders`. |
-| **Feature** | One business concept (`Project`, `Todo`) with its own slice across layers. Singular. |
-| **Slice / vertical slice** | The files a feature touches in Domain, Application, Infrastructure, API, SQL and tests. |
-| **Request** | The API body contract (`CreateProjectRequest`). It belongs to Api and maps to an Input. |
-| **Input** | The application contract (`CreateProjectInput`). It belongs to Application and carries the owner/audit fields. |
-| **Entity** | The Domain persistence model (`ProjectEntity`). Never leaves Application/Infrastructure. |
-| **DTO** | The Application projection (`ProjectDto`). It crosses from Application to Api. |
-| **Response** | The API public contract (`ProjectResponse`). It implements `IBaseResponse` and is the OpenAPI schema. |
-| **Handler** | One Application use case (`CreateProjectHandler`). It implements `IHandler<TInput, TResult>` and exposes `HandleAsync`. |
-| **Service** | A shared collaborator used by several handlers (`ITodoTitleService`; the template has none yet, so create it when a second handler needs the behaviour). Its interface lives in `Application/Abstractions/Services`; it is not a use case. |
-| **Port** | An Application interface implemented by Infrastructure (`IProjectRepository`). |
-| **Adapter** | An Infrastructure implementation of a port (`ProjectRepository`) or a configuration source. |
-| **Repository** | The data-access adapter. It may return `Result<T>` for a constraint violation. |
-| **Filter** | A persistence-neutral query shape (`ProjectFilter`); the API parses strings into it. |
-| **Result** | `Result<T>`: success with a value or failure with an `Error`. |
-| **Error** | A typed business failure (`NotFoundError`, `ConflictError`, ...) mapped to HTTP in Api. |
-| **Owner scope** | `OwnerScope` (`ICurrentUser.Owner`): a value type with `VisibleOwner` (`null` for admins), `OwnerForCreate` (always the caller) and `FilterOwners(requested)`. The rule lives here, not in the HTTP mappers. |
-| **Validation set** | `ValidatorSet<TInput>`: the validators for one input. It refuses an empty set, so a missing registration fails at startup. |
-| **Sort catalog** | `{Feature}SortCatalog` (Application): the accepted sort keys and their description. |
-| **Sort column map** | `{Feature}SortColumns` (Infrastructure): the catalog keys mapped to physical columns; a test asserts alignment. |
-| **Projection** | A deliberately partial read type (`TodoTitle`) in `Application/{Feature}/Projections`; it crosses the port and handler without nullable fields or `!` casts. |
-| **Endpoint adapter** | `{Feature}Endpoints` (Api): the request → input → handler → HTTP response plumbing, kept out of `{Feature}Routes`. |
-| **Audit fields** | `CreatedAt`, `UpdatedAt`, `CreatedBy`, `UpdatedBy`. |
-| **Policy** | An ASP.NET authorization policy (`User`, `Operator`, `Admin`, `External`) requiring a role and an email claim. |
-| **Test user** | A fixed identity used by tests (`TodoUser`, `TodoOperator`, ...). One per role plus negative cases. |
-| **Fixture** | An xUnit assembly fixture that starts the shared AppHost once per test project. |
-| **Builder** | A test helper with valid defaults (`ProjectBuilder`). |
-| **Resetter** | A Respawn-based helper that empties the database between tests. |
-| **Local mode** | `aspire run` / `aspire start`: dashboard, telemetry, seed, Swagger sidecar. |
-| **Swagger sidecar** | The local-only `local/openapi` project: fetches `/openapi/v1.json`, merges the examples catalog, serves Swagger UI with the profile picker, and proxies `/api/*` to the API. |
-| **Examples catalog** | `local/openapi/examples.json` plus `bodies/` and `responses/`: executable request, parameter and response examples keyed by `METHOD /path`. |
-| **Profile picker** | The Swagger UI header control that mints an HS256 token for a profile in `users.json` (`user`, `operator`, `admin`, `external`, `no-role`). |
-| **Local Swagger check** | The manual gate: `aspire start`, open the `swagger` resource, select the documented profile and run every new example. |
-| **Component mode** | Tests: infrastructure + schema, API in-process. |
-| **Functional mode** | Tests: infrastructure + schema + API as a separate process, HTTP only. |
-| **AppHost contract** | `AppHostContract.cs`: run modes, resource names, config keys and JWT trust mapping shared by the AppHost and tests. |
-| **Gate** | A command that must pass before a change is done (`build`, `publish`, `test`, `verify`, `coverage`); endpoint/example changes also run the manual local Swagger check. |
-| **Source of truth** | The one place a fact lives: schema in `local/database`, table names in `{Feature}Table`, config in `AppSettings`, local topology in the AppHost. |
+**Domain**: entities, enums and business constraints. No framework, no HTTP, no SQL.
+_Avoid_: model, core (as a project name)
+
+**Application**: use cases, ports, DTOs, validation and `Result`. It answers "what can the system do".
+_Avoid_: business layer, services
+
+**Infrastructure**: adapters for PostgreSQL and OpenBao. It answers "how the system reaches its dependencies".
+_Avoid_: data layer, DAL
+
+**Api**: the composition root and the HTTP adapter. It owns routing, authentication, JSON, OpenAPI and
+ProblemDetails.
+_Avoid_: presentation, controller layer
+
+**Composition root**: the place that wires implementations (`ConfigureServices` plus each feature module).
+_Avoid_: bootstrap, container config
+
+**Module**: a `{Feature}Module` extension that registers everything one feature needs: repository, use cases,
+routes, JSON context and OpenAPI transformer.
+_Avoid_: installer, registration class
+
+**Port**: an interface the Application defines and Infrastructure implements (`ITodoRepository`).
+_Avoid_: repository interface (too narrow), gateway
+
+**Endpoint adapter**: `{Feature}Endpoints`, the static class that maps a request to an input, calls a handler
+and converts the result.
+_Avoid_: controller, handler (reserved for the Application)
+
+## Use cases
+
+**Handler**: `IHandler<TInput, TResult>`, one class per use case. Validates, applies the business rule and
+returns `Result<T>`.
+_Avoid_: command handler, service, use case (the class is the use case)
+
+**Input**: the Application contract of a use case (`CreateTodoInput`). It carries the owner scope, never the
+HTTP shape.
+_Avoid_: command, DTO, model
+
+**Request**: the HTTP body (`CreateTodoRequest`). It maps to an Input through `ToInput(OwnerScope)`.
+_Avoid_: command, payload, model
+
+**Response**: the HTTP body returned (`TodoResponse`). It maps from a DTO or projection.
+_Avoid_: view model, output
+
+**DTO**: the Application read model (`TodoDto`), flat and non-nullable where the entity guarantees a value.
+_Avoid_: model, entity, view model
+
+**Projection**: a deliberately partial read (`TodoTitle`), returned by a dedicated port method.
+_Avoid_: summary, partial DTO
+
+**Filter**: the persistence-neutral query contract (`TodoFilter`) built by a filter input.
+_Avoid_: query object, criteria
+
+**ValidationService**: the base class that runs `ValidatorSet<TInput>` and skips the action on failure.
+_Avoid_: pipeline, decorator, middleware
+
+**ValidatorSet**: every validator registered for one input, aggregated and never empty.
+_Avoid_: validator collection, composite validator
+
+**Startup check**: the `IStartupCheck` registration that builds a use case once at startup so a missing
+validator fails before the first request.
+_Avoid_: warm-up, health check
+
+## Results and errors
+
+**Result**: `Result<T>` — a value or a typed `Error`, never both.
+_Avoid_: response, outcome, Either
+
+**Error**: the typed business failure (`BadRequestError`, `NotFoundError`, `ConflictError`, …). It has no HTTP
+semantics; the Api maps it.
+_Avoid_: exception, problem, failure (as a type)
+
+**ProblemDetails**: the RFC 9457 body the API returns for 4xx/5xx, built by `ProblemDetailsFactory`.
+_Avoid_: error response, error model
+
+## Ownership and access
+
+**Owner**: the caller who created an item; fixed at creation.
+_Avoid_: creator, author
+
+**OwnerScope**: the value type that turns the caller into `VisibleOwner`, `OwnerForCreate` and `FilterOwners`.
+_Avoid_: user context, tenant
+
+**VisibleOwner**: `null` for admins, the caller email otherwise; the owner filter passed to a port.
+_Avoid_: createdBy filter
+
+**Owners**: the owner list of a filter request (`owners` in JSON). Admins keep it; everyone else is pinned.
+_Avoid_: createdBy list
+
+**LastWriter**: the caller stored as `UpdatedBy` when an update changes something.
+_Avoid_: editor, modifier
+
+**Policy**: a named authorization rule in `Constants` (`User`, `Operator`, `Admin`, `External`).
+_Avoid_: role (the role is the claim value; the policy is the rule)
+
+## Persistence
+
+**Data source**: the singleton `NpgsqlDataSource` that owns the connection pool.
+_Avoid_: connection factory, DbContext
+
+**Table helper**: `{Feature}Table`, the constants for the table, columns and index names.
+_Avoid_: schema, metadata
+
+**Sort catalog**: the accepted sort keys, in Application.
+_Avoid_: sort options
+
+**Sort columns**: the whitelist map from key to physical column, in Infrastructure.
+_Avoid_: column map
+
+**Seed**: synthetic rows in `local/database/seed/*.sql`, applied only in Local mode.
+_Avoid_: fixtures, sample data (in code)
+
+**Forward-only script**: a numbered SQL file that is never edited after it is deployed; a change is a new
+file.
+_Avoid_: migration (there is no migration runner)
+
+## JSON and OpenAPI
+
+**JSON context**: a source-generated `JsonSerializerContext` for a feature's contracts or a shared payload.
+_Avoid_: serializer, converter
+
+**Document**: the OpenAPI document at `/openapi/v1.json`, built by `OpenApiConfiguration` and the feature
+transformers.
+_Avoid_: Swagger (Swagger is the UI)
+
+**Schema descriptor**: `{Feature}OpenApiSchemas`, the static class that adds descriptions, formats and enums
+to the generated schemas.
+_Avoid_: schema builder, Swagger config
+
+**Examples catalog**: `local/openapi/examples.json` plus `bodies/` and `responses/`, merged by the sidecar.
+_Avoid_: Swagger examples (the catalog is separate from the document)
+
+## Tests
+
+**Fixture**: the shared AppHost environment for a test project (`ComponentTestFixture`, `FunctionalTestFixture`).
+_Avoid_: test server, harness
+
+**Component test**: in-process API against the real containers.
+_Avoid_: integration test (there is a separate functional suite)
+
+**Functional test**: the API as a separate process, HTTP only.
+_Avoid_: end-to-end test
+
+**Reset**: emptying the databases before a test (`[ResetDatabase]`, Respawn).
+_Avoid_: cleanup, teardown
+
+**Builder**: a test data builder with valid defaults (`TodoBuilder`).
+_Avoid_: factory, mother
 
 ## Decisions
 
-### D-001 — `Result<T>` and `Error` live in Application
+The reasons behind the patterns are recorded as ADRs in `docs/adr/`:
 
-**Decision:** Application handlers return `Result<T>`; the `Error` hierarchy is in `Application/Results`;
-`ApiResultExtensions` chooses the status and `ProblemDetailsFactory` builds every ProblemDetails body.
-
-**Reason:** business failures are expected outcomes, not exceptions; HTTP is an Api concern. Domain stays free
-of transport concepts, and one factory keeps `type`/`traceId` consistent.
-
-**Consequence:** a new error type needs a mapping and OpenAPI metadata in the same change. Domain must not
-reference `Result<T>`.
-
-### D-002 — No MediatR, no validation decorators, no pipeline
-
-**Decision:** handlers inherit `ValidationService`, call `ExecuteAsync`, and receive a `ValidatorSet<TInput>`
-through the constructor. `ValidatorSet` refuses an empty registration, and `Program.Main` enables
-`ValidateOnBuild`.
-
-**Reason:** explicit and AOT-safe. No assembly scanning, no dynamic dispatch, no hidden pipeline; a missing
-registration is a startup failure, not a silent validation bypass.
-
-**Consequence:** a new handler must be registered by its closed `IHandler<TInput, TResult>` interface and its
-`ValidatorSet<TInput>` must be registered too. There is no "automatic" cross-cutting behaviour; add it to the
-base class if it is truly shared.
-
-### D-003 — ADO.NET/Npgsql instead of EF Core or Dapper
-
-**Decision:** repositories use `NpgsqlCommand`/`NpgsqlDataReader` with manual mapping.
-
-**Reason:** predictable SQL, no reflection/expression trees, Native AOT compatibility, no ORM model drift.
-
-**Consequence:** every query and mapping is written by hand; `*Table`, `*SortCatalog`, `*SortColumns` and the
-schema script are the sources of truth. Adding a sort key edits the catalog and the column map, and the
-alignment test fails until both agree.
-
-### D-004 — Explicit composition root
-
-**Decision:** `ConfigureServices` registers every validator, `ValidatorSet<T>`, handler and repository;
-`EndpointExtension` registers every route group.
-
-**Reason:** the AOT analyzer and the reader both see every type; no assembly scanning, no magic.
-
-**Consequence:** a forgotten registration fails at startup through `ValidateOnBuild`; the component tests
-catch anything that only fails when a request is served.
-
-### D-005 — One AppHost, three modes
-
-**Decision:** `local/aspire/{App}.AppHost` serves Local, Component and Functional modes; there is no test-only
-AppHost.
-
-**Reason:** one topology, one contract, no drift between local development and tests.
-
-**Consequence:** `AppHostContract` is shared with `Tests.Shared`; a test-mode change must not leak into Local
-mode, and vice versa.
-
-### D-006 — Ephemeral local infrastructure
-
-**Decision:** no volumes, bind mounts or persistent lifetimes. `db-init` applies schema every start and seed in
-Local mode; `openbao-init` writes secrets every start.
-
-**Reason:** a start is reproducible and stopping removes the data; no stale local state.
-
-**Consequence:** never rely on data surviving a restart; the seed must cover every state; a test gets an empty
-schema.
-
-### D-007 — Locally signed JWTs, no identity provider
-
-**Decision:** local development and tests use HS256 tokens signed with a key in OpenBao/AppHost secrets; tests
-sign their own tokens with a per-run key.
-
-**Reason:** no external dependency, no login endpoint, validation stays on, tokens are isolated per run.
-
-**Consequence:** `TestTokenIssuer`, `AppHostContract.JwtTrust` and `devtoken` must agree on issuer, audience,
-key and claim types. Never obtain a test token from a login endpoint.
-
-### D-008 — OpenBao for secrets
-
-**Decision:** the application reads secrets from OpenBao at startup; `openbao-init` seeds them; `appsettings`
-holds no secrets or connection strings.
-
-**Reason:** the same code path in local, test and deployed environments; no secret in Git or logs.
-
-**Consequence:** adding a secret means updating the initializer, the AppHost parameter, the docs and the tests
-that read it; the application never receives the value as an environment variable.
-
-### D-009 — Native AOT first
-
-**Decision:** the API is published with Native AOT; no reflection, `dynamic`, reflection JSON, Swashbuckle or
-suppressions.
-
-**Reason:** startup, size and trimming safety; the template proves the code path works.
-
-**Consequence:** every new contract is in the JSON context; every new registration is explicit; every new
-package is checked for AOT compatibility; `dotnet publish` is the gate.
-
-### D-010 — Four test levels
-
-**Decision:** unit for pure logic, component for the HTTP pipeline + real database, functional for a complete
-flow, architecture for dependency/structure rules.
-
-**Reason:** each level answers a different question; the suite stays meaningful and as fast as the
-infrastructure allows.
-
-**Consequence:** a feature normally adds unit + component + functional (when it spans endpoints) + an
-architecture assertion for a new port/filter; a component test is not a substitute for a unit test and vice
-versa.
-
-### D-011 — Sample Todo is a reference, not a dependency
-
-**Decision:** the template ships a `Todo` sample; this skill ships a second, independent `Project` example.
-
-**Reason:** an agent must be able to work after the sample is removed or changed; the example demonstrates the
-same patterns without depending on the repository's sample files.
-
-**Consequence:** use `../assets/examples/` when `Todo` is absent or modified. When removing `Todo`, follow the
-ordered checklist and keep the `db-init` readiness query valid.
-
-### D-012 — Handlers own use cases; services are shared collaborators
-
-**Decision:** one handler per use case in `{Feature}/Handlers/{Verb}`. Behaviour reused by several handlers
-gets an interface in `Application/Abstractions/Services`.
-
-**Reason:** keeps use cases explicit and avoids a service layer that duplicates handlers.
-
-**Consequence:** do not create a service for one handler; extract it when a second handler needs it.
-
-### D-013 — OwnerScope is a value type, not a nullable string
-
-**Decision:** `ICurrentUser.Owner` returns `OwnerScope`; the type owns `VisibleOwner`, `OwnerForCreate` and
-`FilterOwners`. The HTTP request mappers call those methods; they do not implement the rule themselves.
-
-**Reason:** one authorization rule, one place to test it. A nullable string hides the difference between
-"admin can see every owner" and "owner is missing".
-
-**Consequence:** new endpoints use `currentUser.Owner`; a new owner rule is added to `OwnerScope` and covered by
-`OwnerScopeTests`, not copied into a mapper.
-
-### D-014 — Partial reads use projection types; endpoint plumbing uses an adapter
-
-**Decision:** a query that selects a subset returns a projection type from
-`Application/{Feature}/Projections` (for example `TodoTitle`). The request → input → handler → response
-plumbing lives in `{Feature}Endpoints`; `{Feature}Routes` keeps templates and metadata.
-
-**Reason:** partial entities/DTOs push `!` casts and runtime surprises to the response edge; repeated endpoint
-plumbing hides the convention in six copies.
-
-**Consequence:** do not fill an all-nullable DTO and cast it later; add a projection. Do not put owner or result
-mapping back in the route group; add an adapter method.
-
-### D-015 — Every endpoint ships its OpenAPI contract and a local example
-
-**Decision:** a new endpoint is complete only when it appears in `/openapi/v1.json` with its metadata, status
-codes and schema, `OpenApiContractTests` covers its operation id and status codes, and
-`local/openapi/examples.json` has an executable example with bodies/parameters that match the seed and a
-profile from `users.json`.
-
-**Reason:** the document is the caller's contract and Swagger is how the team exercises it locally. An
-endpoint that is absent from the document or has no runnable example is invisible in practice, even when the
-code works.
-
-**Consequence:** adding an endpoint edits the API metadata, JSON context and schema descriptors, the OpenAPI
-contract test, the seed when it needs a new state, and the local catalog. The local Swagger check is manual
-and reported, not assumed.
+| ADR | Decision |
+|---|---|
+| 0001 | Native AOT for the API |
+| 0002 | ADO.NET/Npgsql instead of an ORM |
+| 0003 | Result/Error instead of exceptions for business outcomes |
+| 0004 | Explicit registration and feature modules |
+| 0005 | Every secret comes from OpenBao |
+| 0006 | Ephemeral Aspire environment |
+| 0007 | ULID stored as `bytea` |
+| 0008 | Forward-only SQL scripts |
+| 0009 | Owner identified by the email claim |

@@ -1,168 +1,130 @@
 # Configuration and secrets
 
-## Rules
+Configuration is built deterministically, validated at startup, and holds no secrets. Every secret comes from
+OpenBao in every mode.
 
-- `appsettings*.json` contain no secrets and no connection strings. They may contain non-sensitive defaults
-  (CORS origins, OpenAPI flag, issuer/audience, logging).
-- Secrets come from OpenBao at startup, or from the platform in a deployed environment. The AppHost passes only
-  `OpenBao:*` (address, token, mount, path) to the application, never the secret values.
-- Configuration is bound manually, not with the reflection-based `ConfigurationBinder`. The AOT analyzer must
-  see every property.
-- Invalid settings fail at startup with a clear message, not on the first request with a `500`.
+## Sources and precedence
 
-## Precedence
-
-`AppConfigurationHelper.ConfigureSources` rebuilds the sources deterministically. Later sources win:
+`AppConfigurationHelper.ConfigureSources` clears the sources the slim builder added and rebuilds them:
 
 ```text
 appsettings.json
-→ appsettings.{Environment}.json
-→ user secrets (Development only)
-→ OpenBao (when OpenBao:Address is set)
-→ environment variables
-→ command line
+appsettings.{Environment}.json          (optional; Environment is Development, Production, Staging…)
+user secrets                            (Development only)
+OpenBao secret                          (skipped when OpenBao:Address is empty)
+environment variables
+command line
 ```
 
-`OpenBao` is located through a bootstrap configuration (`bootstrapBuilder`) that reads the JSON files, user
-secrets (Development), environment and command line. That is how `OpenBao:Address`/`OpenBao:Token` can arrive
-from the environment without being known before the source is added.
+Later sources win. A separate **bootstrap** configuration (same files, user secrets, environment, command
+line) exists only to locate OpenBao, because its address and token must be read before the OpenBao source is
+added.
 
-When `OpenBao:Address` is empty, `AddOpenBaoSecrets` is a no-op. This is why unit tests and the component test
-mode can start without OpenBao; the component fixture still points at the real container and asserts the
-secret came from it.
+Environment files are `appsettings.Production.json`, `appsettings.Staging.json`,
+`appsettings.Integration.json` — the name must match `ASPNETCORE_ENVIRONMENT` exactly. On Linux the file
+system is case-sensitive: `appsettings.PRODUCTION.json` would never load.
 
-## AppSettings
+## Binding and validation
 
-`Api/Configuration/AppSettings.cs` is a plain class with `required` properties:
+`LoadAppSettings` binds manually — the reflection-based `ConfigurationBinder` is not AOT friendly:
 
 ```csharp
-public sealed class AppSettings
+var appSettings = new AppSettings
 {
-    public required ConnectionStringsSection ConnectionStrings { get; init; }
-    public required string[] CorsAllowedOrigins { get; init; }
-    public required bool CorsAllowCredentials { get; init; }
-    public required bool OpenApiEnabled { get; init; }
-    public required string[] ValidIssuers { get; init; }
-    public required string Audience { get; init; }
-}
+    ConnectionStrings = new ConnectionStringsSection
+    {
+        Postgres = builder.Configuration.GetSection(nameof(AppSettings.ConnectionStrings))
+                                      [nameof(ConnectionStringsSection.Postgres)] ?? string.Empty,
+    },
+    CorsAllowedOrigins = GetStringArray(builder.Configuration, Constants.CorsAllowedOrigins),
+    // …
+};
 ```
 
-Sections derive from `SectionBase`. The class name must end in `Section`; `SectionBase` removes the suffix to
-form the configuration section name (`ConnectionStringsSection` → `ConnectionStrings`).
+`AppSettingsValidator` (`IValidateOptions<AppSettings>`) rejects a missing connection string, an empty
+`ValidIssuers`, a non-HTTPS/URN issuer, an empty `Audience`, and throws `OptionsValidationException` before
+the host starts. `AuthenticationSettings.Load` validates the auth mode separately.
 
-`AppConfigurationHelper.LoadAppSettings` binds each value manually, then runs `AppSettingsValidator` (an
-`IValidateOptions<AppSettings>`). Add a new property in four places:
+`SectionBase` derives a section name from its class name minus the `Section` suffix
+(`ConnectionStringsSection` → `ConnectionStrings`). A new section class inherits it.
 
-1. `Constants` (the key, if it is a cross-cutting key).
-2. `AppSettings` (the property) and `LoadAppSettings` (the manual binding, including arrays/booleans).
-3. `AppSettingsValidator` (required, format, range, combinations).
-4. `appsettings.json` / `appsettings.{Environment}.json` (non-secret defaults) and the AppHost/environment
-   (the value that changes per environment).
+## Keys
 
-`AuthenticationSettings` is separate on purpose: it resolves the two JWT modes and their valid combinations
-before the auth handler is registered. `AppSettings` holds the common issuer/audience; the mode-specific
-authority and key live in `AuthenticationSettings`.
-
-## Keys the template reads
-
-| Key | Meaning | Source |
-|---|---|---|
-| `ConnectionStrings:Postgres` | PostgreSQL connection string | AppHost `WithReference(todoDb, "Postgres")`; environment in deployment |
-| `OpenBao:Address` | OpenBao base address; empty disables the source | AppHost `WithOpenBaoSecrets` |
-| `OpenBao:Token` | OpenBao token | AppHost per-run root token; platform in deployment |
-| `OpenBao:Mount` | KV v2 mount, default `secret` | AppHost |
-| `OpenBao:Path` | Secret path, per mode | AppHost |
-| `OpenBao:TimeoutSeconds` | Single request timeout, default 5 | Optional |
-| `API_KEY` | HS256 key, read from OpenBao in Symmetric mode | `openbao-init` |
-| `Authentication:Mode` | `Symmetric` or `Oidc`; inferred from `Authentication:Authority` when empty | appsettings/environment |
-| `Authentication:Authority` | OIDC authority; must be empty in Symmetric mode | appsettings/environment |
-| `ValidIssuers` | Accepted JWT issuers (array) | appsettings/AppHost |
-| `Audience` | Accepted JWT audience | appsettings/AppHost |
-| `Cors:AllowedOrigins:N` | Browser origins; empty disables CORS | appsettings |
-| `Cors:AllowCredentials` | Allow credentials | appsettings |
-| `OpenApi:Enabled` | Serve `/openapi/v1.json` | appsettings (false in PRODUCTION) |
-| `Logging:LogLevel:*` | Log levels | appsettings/environment |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint; empty disables export | AppHost |
-
-## Adding a setting
-
-1. Add the key to `Constants` if it is shared; add the property to `AppSettings` and bind it manually.
-2. Add validation to `AppSettingsValidator` (required, URI, range, mutual exclusion).
-3. Add the non-secret default to `appsettings.json`; add environment-specific values to
-   `appsettings.{Environment}.json` only when they are not secrets.
-4. Add the value to the AppHost (`WithEnvironment` or `WithReference`) or to the deployment configuration.
-5. If the setting must reach the tests, add it to `AppHostContract.AppSettings` and to `TestAuthSettings` or the
-   fixture; the component fixture asserts that the application reads the test value.
-6. Update `README.template.md` / `README.md` configuration table and `local/local-development.md` when the
-   value changes local behaviour.
-
-**Done when:** an invalid value fails at startup with a message naming the key; the value is in no secret
-store unless it is a secret; tests and local development read the same key the application reads.
-
-## Adding a secret
-
-A secret is a value that must not appear in Git, logs, test output or `appsettings*.json`.
-
-1. Add the secret name to `local/aspire/{App}.OpenBaoInitializer/Program.cs` (or the OpenBao seeding code) and
-   write it into the secret path. The initializer is idempotent: it runs on every start.
-2. Add the value as an AppHost parameter (user secrets for local), for example
-   `builder.AddParameter("my-secret", secret: true)`, or read it from the AppHost user secrets.
-3. Pass the parameter to the initializer only; pass `OpenBao:*` to the application through
-   `WithOpenBaoSecrets`.
-4. Read it with `configuration["MY_SECRET"]` where it is needed; validate it at startup.
-5. Add it to the test trust/settings only if the test must provide it; otherwise the test reads it from OpenBao
-   like the application.
-6. Document the name and purpose (never the value) in `README.template.md` and `local/local-development.md`.
-7. Rotate with `dotnet local/tools/devtoken.cs init --rotate` for the local JWT key; for other secrets, change
-   the AppHost user secret and restart.
-
-**Done when:** `git grep` and the test output contain no secret value; the initializer exits 0; the
-application reads the secret from OpenBao; no `API_KEY`/secret value is present in the test process
-environment (the component fixture fails if it is).
-
-## OpenBao adapter
-
-`Infrastructure/Secrets/`:
-
-- `OpenBaoConfigurationExtensions.AddOpenBaoSecrets` adds the source when `OpenBao:Address` is set.
-- `OpenBaoConfigurationProvider` reads one KV v2 secret at startup and exposes its entries as configuration
-  keys. There is no watcher, no lease and no reload: restart to pick up a rotated secret.
-- `OpenBaoClient` is a small HTTP client with a source-generated JSON context; it never logs the token or the
-  secret values.
-- `OpenBaoOptions` holds address, token, mount and timeout.
-
-Do not put secret values in `OpenBao:Path` (the path is not secret, the values are). Do not log
-`OpenBao:Token`. Redact `aspire describe` output.
-
-## Test contract
-
-The AppHost and the tests share `AppHostContract.cs` (the file is compiled into `Tests.Shared` through a
-linked `Compile` item):
-
-- `RunMode` selects `Local`, `Component` or `Functional`.
-- `Resources` names must stay stable; tests and docs use them.
-- `AppSettings` holds the exact keys the API reads.
-- `OpenBao` holds the address/token/mount/path keys and the per-mode path.
-- `LocalAuth` holds the local JWT algorithm, issuer, signing-key parameter, audience and role-claim keys.
-- `JwtTrust(resourceName)` is the single mapping from a resource to the configuration keys that make it trust
-  the local issuer. Add an entry for every new application.
-
-The component fixture fails if:
-
-- a setting it passed is not read by the application (a misspelled key);
-- `API_KEY` is present in the test process (it must come from OpenBao);
-- a `JwtBearer` scheme would download metadata (an `Authority`/`MetadataAddress` was not cleared).
-
-The functional fixture records every outbound HTTP call through `OutboundCallRecorder`; tests assert it stays
-empty. A new external dependency must have a local substitute; do not relax the recorder.
-
-## Troubleshooting
-
-| Symptom | Cause / fix |
+| Key | Meaning |
 |---|---|
-| `'API_KEY' is required in Symmetric mode` | OpenBao did not seed it, or `OpenBao:Path` is wrong. Check `openbao-init` exit code. |
-| `'API_KEY' must be at least 32 UTF-8 bytes` | The key is too short; rotate with `devtoken init --rotate`. |
-| `The application did not read 'API_KEY' from OpenBao` | A stray `API_KEY` in the test process, or the fixture passed it directly. |
-| `The application does not read the test value for '<key>'` | The key name differs from what the app reads, or a later configuration source overrides it. |
-| `JwtBearer scheme '…' would download metadata` | The trust mapping did not clear `Authority`/`MetadataAddress` (`TrustValue.Empty`). |
-| Invalid settings only fail on the first request | The validator is missing a rule or the value is read after the host is built. |
+| `ConnectionStrings__Postgres` | Value written by `openbao-init` as `ConnectionStrings:Postgres`. The API reads it from OpenBao. |
+| `OpenBao__Address` | Base address; empty disables the OpenBao source. |
+| `OpenBao__Token` | Token sent as `X-Vault-Token`. |
+| `OpenBao__Mount` | KV v2 mount; default `secret`. |
+| `OpenBao__Path` | Secret path, one per mode: `cleanwebapitemplate/local`, `…/component`, `…/functional`. |
+| `OpenBao__TimeoutSeconds` | Per-request timeout; default 5. |
+| `API_KEY` | HS256 signing key, **stored in OpenBao** as a secret entry. At least 32 UTF-8 bytes. |
+| `Authentication__Mode` | `Symmetric` (alias `local`) or `Oidc`. Empty means inferred. |
+| `Authentication__Authority` | OIDC authority (absolute HTTPS). Must be empty in Symmetric mode. |
+| `Audience`, `ValidIssuers__N` | Token validation; supplied per run by the AppHost. |
+| `Cors__AllowedOrigins__N`, `Cors__AllowCredentials` | Browser origins; empty disables CORS. |
+| `OpenApi__Enabled` | Serves `/openapi/v1.json`; true in Development, false in Production. |
+
+AppHost-only settings:
+
+| Key | Meaning |
+|---|---|
+| `RunMode` | `Local` (default), `Component` or `Functional`. |
+| `LocalAuth:Algorithm` | `HS256`; the AppHost rejects anything else. |
+| `LocalAuth:Issuer`, `LocalAuth:Apis:{resource}:Audience`, `LocalAuth:Apis:{resource}:RoleClaim` | Token trust values from `local/tools/devtoken.json`. |
+| `Parameters:local-jwt-signing-key` | HS256 key, written by `devtoken init` into AppHost user secrets. |
+| `Parameters:openbao-root-token` | Optional OpenBao root token for a test run. |
+| `Testing:OutboundProxy` | Proxy URL the functional fixture records. |
+
+db-init reads `ConnectionStrings__Postgres`, `Schema__Path` and, in Local mode, `Seed__Path`. The Swagger
+sidecar reads `API_BASE_URL`, `EXAMPLES_PATH` and the `LocalAuth__*` values.
+
+## OpenBao
+
+`Infrastructure/Secrets` is a hand-written KV v2 client, because the available .NET Vault clients are not AOT
+safe:
+
+- `OpenBaoClient` — `ReadAsync(path)` returns the string entries of `data.data`; `WriteAsync(path, values)`
+  replaces the secret. Errors become `OpenBaoException` with the server's `errors` list, never the token.
+- `OpenBaoOptions` — `Address`, `Token`, `MountPath`.
+- `OpenBaoConfigurationProvider` — reads the secret **once**, while the host configuration is built. There is
+  no watcher and no reload: restart to pick up a rotated secret.
+- `OpenBaoConfigurationSource` — builds one `HttpClient` and one client per process.
+- `OpenBaoConfigurationKeys` — the key names and defaults (`secret`, 5 s).
+- `AddOpenBaoSecrets(bootstrap)` — no-op when the address is empty; throws with a clear message when the
+  address is set but the token, path or timeout is missing or invalid.
+- `OpenBaoJsonSerializerContext` — the source-generated metadata for the Vault payloads.
+
+### The local flow
+
+1. `AppHost` starts `openbao/openbao:2.7.2` unsealed in dev mode, in memory, no volume.
+2. `openbao-init` (`local/aspire/…OpenBaoInitializer`) receives `OpenBao__*`, `API_KEY` and
+   `ConnectionStrings__Postgres`, and writes both values as one secret at `OpenBao:Path`.
+3. The application receives only `OpenBao__Address`, `OpenBao__Token`, `OpenBao__Mount` and `OpenBao__Path`.
+4. At startup `AddOpenBaoSecrets` reads the secret and exposes each entry as a configuration key
+   (`API_KEY`, `ConnectionStrings:Postgres`, …).
+5. The connection string reaches `AppSettings.ConnectionStrings.Postgres`; `API_KEY` reaches
+   `AuthenticationSettings`.
+
+The component fixture points the in-process application at the same server and asserts that both values came
+from OpenBao. The functional API process does the same through the environment.
+
+### Adding a secret
+
+1. Decide the configuration key and how it is validated at startup (`AppSettingsValidator` or a dedicated
+   settings type).
+2. Write it in `local/aspire/…OpenBaoInitializer/Program.cs` (add the constant, the environment variable and
+   the dictionary entry) and in the AppHost resource (`OpenBao.cs`): pass the value as
+   `WithEnvironment(key, …)` from a parameter or user secret.
+3. Do **not** pass the value to the application as an environment variable; pass only `OpenBao:*`.
+4. Read it from configuration in the composition root and validate it before `Build`.
+5. Update the component fixture only if the value is not already written by `openbao-init`; extend
+   `EnsureTestConfigurationIsEffective` to prove it came from OpenBao.
+6. Document the key by name in the README; never the value.
+
+## Environment names in tests
+
+There is no `appsettings.Testing.json`. The component fixture sets `ASPNETCORE_ENVIRONMENT=Testing` and passes
+the JWT trust, OpenBao and log levels as in-memory settings and process environment variables; the functional
+AppHost sets them on the application resource. A missing key fails
+`EnsureTestConfigurationIsEffective` with a message naming it.

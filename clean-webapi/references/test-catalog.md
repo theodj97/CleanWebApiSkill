@@ -1,142 +1,85 @@
 # Test catalog
 
-What each test class in the template protects, so an agent can pick the right suite to run and know which
-tests to mirror for a new feature. The `Todo` rows are the sample; they disappear with the sample, but the
-category and the shared infrastructure stay.
+What each existing test class protects, so a change can be matched to the tests that should fail and the
+suite that proves it. Update this file when a class is added, renamed or removed.
 
-## Unit tests — `{App}.Api.UnitTests`
+## Unit (`tests/CleanWebApiTemplate.UnitTests`)
 
-No Docker, no host. Run this project first; it is the fastest signal.
-
-### Api / Common
-
-| Class | What it proves |
+| Class | Protects |
 |---|---|
-| `EndpointRouteBuilderExtensionsTests` | The base group maps `/api/{name}` and documents 400/500; the authorized group adds the policy, 401/403 metadata, and requires authentication without a policy. |
-| `HttpContextCurrentUserTests` | `Email` reads the mapped and short email claims and throws without one; `Owner` builds an `OwnerScope` whose `VisibleOwner` is null for Admin and the email for everyone else. |
-| `OwnerScopeTests` | `VisibleOwner`, `OwnerForCreate` and `FilterOwners` for admins and non-admins. |
+| `Api/Common/Abstractions/EndpointRouteBuilderExtensionsTests` | The route-group helpers: `/api/{route}`, tag, 400/500 and 401/403 metadata, policy or plain authentication. |
+| `Api/Common/HttpContextCurrentUserTests` | Email claim (`ClaimTypes.Email` and `email`), admin role detection, missing email throws. |
+| `Api/Configuration/AppSettingsValidatorTests` | Startup validation of the connection string, issuers and audience. |
+| `Api/Configuration/AuthenticationSettingsTests` | Symmetric/Oidc resolution, `local` alias, authority rules, key length, HS256 pinning, `RequireHttpsMetadata`. |
+| `Api/Configuration/ConstantsTests` | The four policy names, no duplicates, the configuration key strings. |
+| `Api/Configuration/GlobalExceptionHandlerTests` | 4xx `BadHttpRequestException` (incl. 413), invalid JSON, generic 500, no double response. |
+| `Api/Configuration/OpenApiSchemaTests` | `CommonOpenApiSchemas` (Ulid, ProblemDetails, sort pair), `TodoOpenApiSchemas`, the helper no-op branches. |
+| `Api/Extensions/ApiResultExtensionsTests` | Success shapes (200/201/204, empty array), every error → status, traceId, unknown error throws, missing value 500. |
+| `Api/Todo/FilteredTodoRequestTests` | `OwnerScope.FilterOwners`: non-admin pinned, admin keeps the requested owners. |
+| `Api/Todo/JsonContractTests` | Every public `*Request`/`*Response` in the feature has source-generated JSON metadata; ProblemDetails too. |
+| `Application/Common/Identity/OwnerScopeTests` | `VisibleOwner`, `OwnerForCreate`, `FilterOwners` for admin and non-admin. |
+| `Application/Common/Results/ErrorTests` | Error subtypes, titles, defaults. |
+| `Application/Common/Results/ResultTests` | Success/failure invariants; `Failure(null)` throws. |
+| `Application/Common/Validation/BaseAbstractValidatorTests` | Shared rules: not empty, ULID (single failure), date, range, sort keys, email, failure format. |
+| `Application/Common/Validation/ValidatorSetTests` | Empty set refuses to construct; valid input → null; invalid → `BadRequestError`. |
+| `Application/Todo/Create/CreateTodoHandlerTests` | Uniqueness pre-check, conflict propagation, trim, DTO mapping, status Pending. |
+| `Application/Todo/Create/CreateTodoInputValidatorTests` | Title rules, owner email, description length. |
+| `Application/Todo/TodoValidatorTests` | The shared feature rules through a test validator. |
+| `Application/Todo/Update/UpdateTodoHandlerTests` | Not found, conflict (pre-check and repository), patch semantics, `UpdatedBy`, no-change path. |
+| `Application/Todo/Update/UpdateTodoInputValidatorTests` | Id, title, last writer, description, status values. |
+| `Infrastructure/Secrets/OpenBaoClientTests` | Read/write payloads, error payload, token header, address/mount validation. |
+| `Infrastructure/Secrets/OpenBaoConfigurationTests` | No-op without address, missing token/path/timeout, provider exposes the entries. |
+| `Infrastructure/Todo/TodoSortColumnsTests` | The map matches `TodoSortCatalog.KeySet`. |
+| `Infrastructure/Todo/TodoTableTests` | Table/column/index constants and the constraint values. |
+| `ServiceDefaults/ExtensionsTests` | `AddServiceDefaults`, `/health` and `/alive`, OTLP exporter only with an endpoint. |
 
-### Api / Configuration
+## Component (`tests/CleanWebApiTemplate.Api.ComponentTests`)
 
-| Class | What it proves |
+| Class | Protects |
 |---|---|
-| `AppSettingsValidatorTests` | Required connection string, at least one issuer (HTTPS or URN), no empty issuer, required audience; every failure is reported. |
-| `AuthenticationSettingsTests` | Symmetric vs Oidc inference, authority/mode combinations, key length, missing key, invalid authority, invalid mode, ignored `API_KEY` in Oidc. |
-| `ConstantsTests` | Every policy is listed once, the JWT scheme is listed, the configuration keys keep their expected values. |
-| `GlobalExceptionHandlerTests` | Null exception, 500 ProblemDetails, BadHttpRequestException, JsonException, null logger. |
-| `OpenApiSchemaTests` | Schema descriptors are no-ops without components/properties, describe Ulid/ProblemDetails/sort, derive status values from `ETodoStatus`, and patch only existing schemas. |
+| `ApiContractTests` | Unknown route 404 and unsupported method 405 as ProblemDetails, malformed JSON 400, missing/null title, status 0 keeps the stored value, empty filter/titles → `200 []`. |
+| `OpenApiContractTests` | Title/version/tag/Bearer, every operation id, documented status codes, schema constraints (max lengths, enum, Ulid, `updatedAt`, owners emails), sort description. |
+| `Todo/AuthenticationTests` | Valid token 201, anonymous 401, the eight invalid tokens 401, no-role 403, no-email 403, delete role matrix. |
+| `Todo/TodoAuthorizationMatrixTests` | 401/403 for every method of the user group; operator can call every method. |
+| `Todo/TodoEndpointsTests` | Create (201, trim, duplicate 409, same title other owner 201, empty/whitespace/long values 400), get 200/404, update 200/404/409, delete 204, filter and titles. |
+| `Todo/TodoFilteredEndpointsTests` | SQL paths: ids, title contains (wildcards literal), every criterion, date range and time zone, sort, paging, owner scoping for user and admin. |
+| `Todo/TodoOwnershipTests` | Non-admin gets 404/404 for another owner's get/update/delete; admin gets 200/200/204; titles are scoped. |
+| `Todo/TodoRepositoryTests` | The real unique index becomes a `ConflictError` result (not an exception). |
+| `Todo/TodoValidationTests` | Invalid id 400, unknown delete 404, sort/paging/date/status/id/email/title limits 400. |
 
-### Api / Extensions and Routes
+## Functional (`tests/CleanWebApiTemplate.Api.FunctionalTests`)
 
-| Class | What it proves |
+| Class | Protects |
 |---|---|
-| `ApiResultExtensionsTests` | 200/201/204/collection/empty collection/scalar/empty string; each `Error` maps to its ProblemDetails/401/403; `traceId` is present; an unhandled error type throws. |
-| `FilteredTodoRequestTests` | `ToInput(OwnerScope)` forces the authenticated email for non-admins and keeps the requested owners for admins. |
+| `Todo/AuthenticationTests` | The out-of-process API trusts the local issuer; valid/anonymous/invalid (7 of 8; `WrongAlgorithm` is component-only) and no-role outcomes; no outbound calls. |
+| `Todo/TodoLifecycleFlowTests` | Create → read → update → delete through real HTTP, stored state, no outbound calls. |
 
-### Application
+## Architecture (`tests/CleanWebApiTemplate.ArchitectureTests`)
 
-| Class | What it proves |
+| Class | Protects |
 |---|---|
-| `BaseAbstractValidatorTests` | `NotNullNotEmpty`, `ValidateUlid`, `ValidateDateTime`, date-range pairing/order, sort-key duplicates/unknown/case-insensitive, email parsing, explicit property name. |
-| `ErrorTests` | Each error record exposes the default or supplied title/description; 401/403 have none. |
-| `ResultTests` | Success/failure invariants: success with value/null, failure with error, invalid constructor states throw. |
-| `CreateTodoHandlerTests` | Duplicate title per owner → `ConflictError` without inserting; same title for another owner inserts; repository conflict propagates; unique title returns the trimmed DTO. |
-| `UpdateTodoHandlerTests` | Unknown id → `NotFoundError`; duplicate title → `ConflictError` without updating; repository conflict propagates; row disappears before update → `NotFoundError`; valid changes return the DTO. |
-| `TodoValidatorTests` | Shared title/description/owner/status rules, including max lengths and registered enum values. |
-| `ValidatorSetTests` | An empty `ValidatorSet<T>` throws; a valid input passes; a failing validator returns `BadRequestError`. |
-| `CreateTodoInputValidatorTests` | Create input: valid, empty/whitespace/null title, overlong title, invalid email. |
-| `UpdateTodoInputValidatorTests` | Update input: valid no-op, invalid ULID, whitespace/overlong title, unregistered status. |
+| `DependencyRulesTests` | Domain/Application/Infrastructure do not depend on outer layers; Application and Domain do not reference ASP.NET Core; Application does not reference Infrastructure. |
+| `StructureTests` | Shared contracts under `Application.Common`; handlers sealed under `Application.{Feature}.{UseCase}`; no Result/Error/Request/Response in Domain; infrastructure feature types are repositories/table/sort maps; ports and routes live in their feature; Application does not reference Infrastructure. |
 
-### Infrastructure and ServiceDefaults
+## Local sidecar (`local/openapi/CleanWebApiTemplate.OpenApiExamples.UnitTests`)
 
-| Class | What it proves |
+| Class | Protects |
 |---|---|
-| `TodoTableTests` | Table/column constants and constraints stay in sync. |
-| `TodoSortColumnsTests` | `TodoSortCatalog.KeySet` equals `TodoSortColumns.Map.Keys`; every catalog key resolves case-insensitively. |
-| `OpenBaoClientTests` | KV v2 read/write, token header, path, error messages never include the token, unexpected payloads throw, invalid options throw. |
-| `OpenBaoConfigurationTests` | No address → no-op; missing setting/invalid timeout → throw; complete config adds one source; every entry becomes a configuration key; server failure throws. |
-| `ExtensionsTests` | OTLP exporter only with an endpoint; `/health` and `/alive` are mapped in and out of Development. |
-
-## Component tests — `{App}.Api.ComponentTests`
-
-Docker required. The shared AppHost starts infrastructure and schema; the API runs in-process.
-
-| Class | What it proves |
-|---|---|
-| `ApiContractTests` | Unknown route/method → ProblemDetails; malformed JSON, missing/null title, status 0, no-match filter/titles → the documented 400/204 contract. |
-| `OpenApiContractTests` | Document title/version/tag/Bearer; the exact operation-id set; every operation's status codes; schema constraints (ULID pattern, max lengths, enum, ProblemDetails). Add the new feature's ids, paths, tag and schemas in the same change: the exact-set assertion fails as soon as a new endpoint appears. |
-| `Todo/AuthenticationTests` | Valid user token → 201; no token/invalid token kinds → 401; no roles/no email → 403; delete role matrix (User 403, Operator/Admin 200, External 403). |
-| `Todo/TodoAuthorizationMatrixTests` | The user group (GET/filter/titles/update) is 401 anonymous, 403 without roles/External, 200 as Operator. |
-| `Todo/TodoEndpointsTests` | Create (owner/status/location/trim/empty/duplicate/overlong), get (200/204), update (patch, unknown, duplicate, other owner), delete, filter, titles projection. |
-| `Todo/TodoFilteredEndpointsTests` | Ids, title contains, wildcard escaping, every criterion, date range/offset, sort, pagination, admin vs user owner filters, one date bound, unknown sort, incomplete paging. |
-| `Todo/TodoOwnershipTests` | User cannot read/update/delete another owner's row; admin can; titles are owner-scoped or global for admins. |
-| `Todo/TodoRepositoryTests` | The unique index maps to `ConflictError` (not a 500) when the pre-check is bypassed. |
-| `Todo/TodoValidationTests` | Invalid ULID, unknown id delete → 200 false, invalid sort, paging, date range, status, owner email, overlong title fragment, empty title update, null body. |
-
-`ComponentTestFixture` starts the AppHost in `Component` mode and asserts the app reads the test configuration,
-the secret came from OpenBao, and no JwtBearer scheme downloads metadata. `ComponentTestBase` adds
-`CreateClientWithServices` for a second application instance. `BlockExternalHttpHandler` refuses non-local HTTP
-calls.
-
-## Functional tests — `{App}.Api.FunctionalTests`
-
-Docker required. The app runs as a separate process under the AppHost; the test only uses HTTP.
-
-| Class | What it proves |
-|---|---|
-| `Todo/AuthenticationTests` | A valid local token creates a Todo without any outbound call; no token → 401; every invalid token kind → 401; no roles → 403. |
-| `Todo/TodoLifecycleFlowTests` | Create → read → update → delete through real HTTP, with the stored state checked at each step. |
-
-`FunctionalTestFixture` starts the AppHost in `Functional` mode, starts the API explicitly, waits for
-`/health/api`, and exposes `OutboundCalls` (assert it stays empty).
-
-## Architecture tests — `{App}.ArchitectureTests`
-
-No Docker.
-
-| Class | What it proves |
-|---|---|
-| `DependencyRulesTests` | Domain does not depend on outer layers; Application does not depend on Infrastructure/Api/ServiceDefaults; Infrastructure does not depend on Api/ServiceDefaults; Application/Domain assemblies do not reference ASP.NET Core; Application does not reference Infrastructure. |
-| `StructureTests` | `I{Feature}Repository` and `{Feature}Filter` live in Application; `Result<T>` lives in `Application.Results`; classes under `Infrastructure.Repositories` are repositories or live under a `Helpers` namespace. |
-
-**Known limitation:** the helper condition hardcodes `Repositories.Todo.Helpers`; generalize it to
-`.Contains(".Helpers")` when a second feature adds helpers. See `ProjectArchitectureTests.md`.
-
-## Local OpenAPI sidecar tests — `local/openapi/{App}.OpenApiExamples.UnitTests`
-
-These test the local-only sidecar, not `src/`. They run without Docker.
-
-| Class | What it proves |
-|---|---|
-| `LocalAuthTests` | Sidecar auth settings require a long key, a valid issuer/audience/role claim and a positive lifetime. |
-| `LocalTokenServiceTests` | The sidecar mints the same HS256 claims/signature as devtoken; a no-role profile omits the role claim. |
-| `LocalUsersTests` | Profiles/roles load; a missing email or file is rejected. |
-| `OpenApiExamplesMergerTests` | Examples merge by operation/parameter/response, route constraints/trailing slashes, inline values, existing examples kept, unknown operation/parameter/response reported, missing body, body+value conflict, parameter refs, path vs operation parameter precedence, Bearer scheme/server, ProblemDetails examples. |
-| `SwaggerIndexTests` | The UI template embeds the users; a missing template is rejected. |
-
-## Shared infrastructure — `{App}.Tests.Shared`
-
-Not tests: the base classes and helpers the other projects use. `TestBase` applies the reset, seeds and builds
-`Client`; `TestServerFixtureBase` owns the AppHost and readiness; `TestUser`/`TestUsers`/`TestTokenIssuer`
-provide identities; `TestData`/`{Feature}Builder` provide deterministic data; `{Feature}TestRepository` reads
-the database; `DatabaseResetConfiguration`/`RespawnDatabaseResetter` reset it; `Eventually` waits;
-`OutboundCallRecorder` catches external calls.
+| `LocalAuthTests` | HS256 key length, lifetime range 1–1440, issuer/audience/role claim. |
+| `LocalTokenServiceTests` | Token minting, claims, expiry, unknown profile. |
+| `LocalUsersTests` | `users.json` shape and unique emails. |
+| `OpenApiExamplesMergerTests` | Catalog merge: bodies, parameters (array form), responses, unknown operation, ambiguous parameter, missing content. |
+| `SwaggerIndexTests` | The custom UI template placeholder. |
 
 ## Which suite for which change
 
-| Change | Minimum suites |
+| Change | Run |
 |---|---|
-| Validator, `ValidatorSet` or pure helper | Unit |
-| Handler business rule | Unit + component (the HTTP/database path) |
-| Owner-scope rule | Unit (`OwnerScopeTests`) + component (ownership) |
-| Sort key or column map | Unit (`*SortColumnsTests`) + component (filtered sort) |
-| Endpoint contract or status code | Component + OpenAPI contract |
-| SQL, index, filter, sort, pagination | Component (repository/filtered tests) |
-| JWT/policy/ownership | Component (authentication/authorization/ownership) + functional (at least the 401/403/valid flow) |
-| Cross-endpoint journey | Functional |
-| New project/namespace | Architecture + unit/component for the new code |
-| Local sidecar/examples | `local/openapi` unit tests + a local `aspire start` check |
-
-When the sample `Todo` is removed, delete its rows from this catalog and add the replacement feature's rows.
-Do not delete the categories: the shared fixtures, the OpenAPI contract tests and the architecture tests still
-apply.
+| Validator or handler logic | Unit |
+| Endpoint, status code, request/response, validation at the edge | Unit + component |
+| Ownership, role, policy | Unit (`OwnerScope`) + component (matrix, ownership) |
+| SQL, repository, unique index, sort | Component (repository, filtered) + unit (sort alignment) |
+| JSON contract, OpenAPI | Unit (`JsonContractTests`, `OpenApiSchemaTests`) + component (`OpenApiContractTests`) |
+| Cross-process behaviour, configuration, secrets | Functional |
+| Layers, folders, sealed types | Architecture |
+| Sidecar, catalog, profiles | `local/openapi/…UnitTests` |

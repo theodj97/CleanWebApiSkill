@@ -1,126 +1,112 @@
 # Native AOT
 
-The API project is published with Native AOT. `PublishAot`, `IsAotCompatible`, `EnableAotAnalyzer`,
-`EnableRequestDelegateGenerator` and `TreatWarningsAsErrors` are not negotiable: do not relax them, move them
-to another project or suppress the analyzer to make a change compile.
+The API publishes as Native AOT. A green build is not a green publish: only `dotnet publish` runs the AOT and
+trimming analyzers against the real graph. This reference lists the rules, the banned APIs and the fixes for
+the warnings you will meet.
 
-The real gate is:
+## Project properties
 
-```bash
-dotnet publish src/{App}.Api/{App}.Api.csproj -c Release -r linux-x64 --self-contained
+`src/CleanWebApiTemplate.Api/CleanWebApiTemplate.Api.csproj`:
+
+```xml
+<PublishAot>true</PublishAot>
+<IsAotCompatible>true</IsAotCompatible>
+<EnableAotAnalyzer>true</EnableAotAnalyzer>
+<EnableRequestDelegateGenerator>true</EnableRequestDelegateGenerator>
+<GenerateDocumentationFile>true</GenerateDocumentationFile>
+<NoWarn>$(NoWarn);CS1591</NoWarn>
 ```
 
-Use `win-x64` (or the target RID) on Windows. A successful `dotnet build` is **not** a successful AOT publish;
-the analyzer and the publish use different roots and the publish catches things the build does not.
+`Application`, `Domain` and `Infrastructure` set `<IsAotCompatible>true</IsAotCompatible>` so the analyzer
+checks the libraries too. `ServiceDefaults` does not publish; it is shared runtime code.
 
-## What breaks AOT
+`Directory.Build.props` sets `TreatWarningsAsErrors`, `EnforceCodeStyleInBuild`, `EnableNETAnalyzers`,
+`NuGetAudit` and `NuGetAuditMode=all`. A warning is a failure. Do not move the AOT properties to another
+project to silence the analyzer.
 
-| Pattern | Why | Fix |
-|---|---|---|
-| `System.Reflection` (`Assembly.Load`, `Type.GetType`, `GetMethod`, `MakeGenericType`, `Activator.CreateInstance`) | Types are trimmed or unavailable | Static code, explicit registrations, source generators |
-| `dynamic` | Requires the runtime binder | Typed models, `JsonDocument`/`JsonNode` with a source-generated context |
-| `JsonSerializer.Serialize(object)` / reflection options | Reflection-based serializer is disabled | `AppJsonSerializerContext` + `JsonSerializer.Serialize(value, AppJsonSerializerContext.Default.Type)` |
-| Swashbuckle `SwaggerGen` or runtime schema generation | Reflection-based | `Microsoft.AspNetCore.OpenApi` + static descriptors |
-| Assembly scanning (`AddValidatorsFromAssembly`, `Assembly.GetTypes`) | Trimming cannot see the types | Explicit registration in `ConfigureServices` |
-| `ConfigurationBinder` over arbitrary types | Reflection | Manual binding in `LoadAppSettings` (or a source-generated binder) |
-| `Enum.GetValues`/`Enum.GetNames` in generic code | Generic reflection can be trimmed | A static array of values, or `Enum.IsDefined(typeof(T), value)` where the analyzer accepts it |
-| `MakeGenericType`/generic math over runtime types | Runtime code generation | Concrete generic instantiations |
-| A package without AOT annotations | Its reflection paths are trimmed | Replace it, use a source-generated alternative, or isolate it behind a compiled path |
-| `RequiresDynamicCode`/`RequiresUnreferencedCode`/`UnconditionalSuppressMessage` | Hides the problem | Fix the cause; do not suppress |
+`Microsoft.CodeAnalysis.BannedApiAnalyzers` is wired into every `src/` project with `BannedSymbols.txt` as an
+`AdditionalFiles` entry. The rule is RS0030, promoted to an error by `TreatWarningsAsErrors`. Tests are not
+analyzed by it.
 
-`BannedSymbols.txt` already blocks the reflection APIs and the reflection-based JSON overloads. The analyzer
-flags them as errors.
+## Banned APIs
 
-## JSON
+`BannedSymbols.txt` blocks:
 
-`Api/Configuration/AppJsonSerializerContext.cs`:
+- `Activator.CreateInstance(Type)` and `(Type, object[])`;
+- `Type.GetType(string)`, `GetMethod`, `GetProperty`, `GetMember`, `MakeGenericType`;
+- `Assembly.Load`, `Assembly.GetType`, `Assembly.GetTypes`, `Assembly.GetExportedTypes`;
+- `MethodInfo.Invoke`, `MakeGenericMethod`, `PropertyInfo.GetValue/SetValue`;
+- `Enum.GetValues(Type)` / `Enum.GetNames(Type)` (the non-generic overloads);
+- `JsonSerializer.Serialize/Deserialize` with a `Type` or with the reflection options.
+
+Use the generic alternatives: `Enum.GetValues<TEnum>()`, `Enum.IsDefined<TEnum>()`,
+`JsonSerializerContext`, static abstract interface members, `[LoggerMessage]`.
+
+## Source-generated JSON
+
+Two contexts, both required:
+
+- `Api/{Feature}/{Feature}JsonSerializerContext` — requests, responses and collection types per feature.
+- `Api/Configuration/AppJsonSerializerContext` — `ProblemDetails` (and anything shared).
+- `Infrastructure/Secrets/OpenBaoJsonSerializerContext` — the Vault payloads.
+
+The Api chains the feature contexts in front of the shared one:
 
 ```csharp
-[JsonSourceGenerationOptions(JsonSerializerDefaults.Web)]
-[JsonSerializable(typeof(CreateProjectRequest))]
-[JsonSerializable(typeof(ProjectResponse))]
-[JsonSerializable(typeof(IEnumerable<ProjectResponse>))]
-[JsonSerializable(typeof(bool))]
-[JsonSerializable(typeof(ProblemDetails))]
-internal partial class AppJsonSerializerContext : JsonSerializerContext;
+services.ConfigureHttpJsonOptions(options =>
+    options.SerializerOptions.TypeInfoResolverChain.Insert(0, AppJsonSerializerContext.Default));
 ```
 
-- Add every request, response, collection, scalar and error shape the API serialises/deserialises.
-- The context is inserted at the front of the resolver chain in `ConfigureServices`.
-- The source generator produces metadata at compile time; the type must be reachable statically.
-- For a type from a library, add `[JsonSerializable(typeof(LibraryType))]`; do not fall back to reflection.
-- `JsonSerializerOptions.Web` (camelCase) is set by `JsonSourceGenerationOptions`.
+Explicit type info at the call site:
 
-A missing entry usually shows up at runtime as a `NotSupportedException`/`InvalidOperationException` about
-metadata, not at build time. Add a component test that calls the endpoint; the test host uses the same context.
+```csharp
+await response.Content.ReadFromJsonAsync(OpenBaoJsonSerializerContext.Default.OpenBaoReadResponse, ct);
+request.Content = JsonContent.Create(body, OpenBaoJsonSerializerContext.Default.OpenBaoWriteRequest);
+await context.Response.WriteAsJsonAsync(problem, AppJsonSerializerContext.Default.ProblemDetails, …);
+```
 
-## Minimal APIs
+`JsonContractTests` (unit) fails when a public `*Request`/`*Response` is missing from the feature context.
+Component tests do **not** catch it: the test host's runtimeconfig keeps reflection-based JSON enabled. Only
+the functional suite (separate process, `IsReflectionEnabledByDefault=false`) and the AOT binary do.
 
-- `EnableRequestDelegateGenerator` is on. Use typed lambda parameters; the generator creates the request
-  delegate at compile time.
-- Avoid `Delegate`/`MethodInfo` binding, `MapMethods` with a runtime-built delegate, or a custom
-  `RequestDelegate` built by reflection.
-- `MapGroup` + `IGroupMap` is the template's pattern; keep the endpoint delegate statically visible.
-- `Results.Ok`/`Results.Created`/`Results.Problem` are AOT-safe; custom `IResult` implementations must write
-  JSON through the context.
+## Safe patterns already in the codebase
 
-## OpenAPI
+| Instead of | Use |
+|---|---|
+| `Enum.GetValues(Type)` | `Enum.GetValues<TEnum>()`, `Enum.IsDefined((TEnum)value)` |
+| Reflection over handlers | `AddUseCase<TInput, TResult, THandler, TValidator>()` with `[DynamicallyAccessedMembers(PublicConstructors)]` on the implementation type parameters |
+| Factories with `Activator` | static abstract members: `IResultFactory<T>.Failure`, `IBaseResponse<TDto, TResponse>.ToResponseModel` |
+| String interpolation in logs | `[LoggerMessage]` partial methods |
+| Reflection mapping | explicit `Map{Feature}(NpgsqlDataReader)` |
+| Reflection JSON | `JsonSerializerContext` + explicit `JsonTypeInfo` |
+| Typed lambda endpoints | method groups (`TodoEndpoints.GetByIdAsync`), request delegate generator enabled |
 
-- `AddApiOpenApi` + `MapOpenApi`.
-- `OpenApiConfiguration` sets the document metadata and security.
-- `{Feature}OpenApiSchemas` patches the generated schemas with static descriptors.
-- `AddOpenApiOperationTransformer` is used for small metadata fixes; it must not download schemas or use
-  reflection over arbitrary types.
-- No Swashbuckle `SwaggerGen`, no `NSwag` runtime generation.
+## Common warnings and fixes
 
-XML documentation is generated for the API project (`GenerateDocumentationFile`) and feeds the OpenAPI
-document. Add XML comments to public request/response members.
-
-## Common warnings
-
-| Warning | Typical cause | Fix |
+| Warning | Cause | Fix |
 |---|---|---|
-| `IL2026` | A member marked `RequiresUnreferencedCode` is called | Replace it with an AOT-safe API; if it is a false positive in `dotnet format analyzers` for minimal APIs, rely on the publish gate (see below) |
-| `IL3050` | A member marked `RequiresDynamicCode` is called | Replace it; do not suppress |
-| `IL2091` | A generic parameter is not preserved | Use a concrete type in the JSON context/registration |
-| `IL2075` | A member is accessed through reflection | Static access or explicit mapping |
-| `IL2026` on `JsonSerializer` | Reflection-based serialization | Use the source-generated context |
-| `IL2026` on `ConfigurationBinder` | Reflection binding | Manual binding |
-| `IL3050` on `MakeGenericType` | Runtime generic construction | Concrete generic types |
-| `IL2026` on a package | The package is not AOT-compatible | Find an alternative or isolate it behind a source-generated path |
+| `IL2026` / `IL3050` | A reflection or dynamic-code API is reachable. | Replace it with a source-generated or static-abstract alternative; never suppress. |
+| `IL2091` | A generic parameter passed to `AddTransient<TService, TImplementation>` lacks `PublicConstructors`. | Annotate the type parameter (`[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors)]`). |
+| `IL2026` in OpenAPI | A reflection-based schema generator. | Use `Microsoft.AspNetCore.OpenApi` with document/operation transformers and static schema helpers. |
+| `IL2026` in JSON | `JsonSerializer.Serialize(value)` without a `JsonTypeInfo`. | Pass the context entry. |
+| Build ok, publish fails | The AOT analyzer runs only on publish. | Run the publish command; do not claim the change is done without it. |
 
-`dotnet format analyzers` excludes `IL2026` and `IL3050` in `scripts/pre-push.sh` because the request-delegate
-source generator does not run in that mode and reports false positives on minimal APIs. That exclusion does
-**not** make the warnings acceptable: the `dotnet publish` gate is the authority. Never add a suppression to
-make `dotnet format analyzers` pass; run the publish.
+Do not add `RequiresDynamicCode`, `RequiresUnreferencedCode` or `UnconditionalSuppressMessage`. A suppression
+hides the cause and the next publish fails elsewhere.
+
+## Publish gate
+
+```bash
+dotnet publish src/CleanWebApiTemplate.Api/CleanWebApiTemplate.Api.csproj \
+  -c Release -r linux-x64 --self-contained
+```
+
+On Windows use `win-x64`. Expect zero warnings and a native binary under
+`src/CleanWebApiTemplate.Api/bin/Release/net10.0/{rid}/publish/`. The publish takes minutes; run it after the
+build and before reporting the change as done.
 
 ## Packages
 
-Before adding a package to `Directory.Packages.props`:
-
-1. Check its AOT/trimming annotations and documentation.
-2. Prefer a package with a source generator or a documented AOT path (Npgsql, `Microsoft.AspNetCore.OpenApi`,
-   FluentValidation without the assembly scanner, `Microsoft.IdentityModel.JsonWebTokens`).
-3. Avoid a package whose convenience API is reflection-based; use its lower-level API if it is annotated.
-4. Build **and** publish with the new package before considering the change done.
-5. If the package cannot be AOT-safe, report it as a blocker and propose an alternative; do not add
-   `RequiresDynamicCode` or suppress the warning.
-
-## Trimming
-
-`PublishAot` implies trimming. `TrimmerRootAssembly`/`TrimmerRootDescriptor` are not a substitute for explicit
-code; avoid them unless a package documents a root descriptor and the user approves it. Adding a root
-descriptor to keep reflection working is a red flag: replace the reflection instead.
-
-## Checklist
-
-- [ ] No new `System.Reflection`, `dynamic`, reflection JSON or reflection OpenAPI.
-- [ ] Every new contract type is in `AppJsonSerializerContext`.
-- [ ] Every new handler, validator, `ValidatorSet<T>` and repository is registered explicitly; `ValidateOnBuild`
-      catches an empty set at startup.
-- [ ] No `RequiresDynamicCode`, `RequiresUnreferencedCode` or `UnconditionalSuppressMessage` added.
-- [ ] New packages checked for AOT compatibility.
-- [ ] `dotnet build` passes with zero warnings.
-- [ ] `dotnet publish ... -c Release -r <rid> --self-contained` passes with zero warnings.
-- [ ] A component test exercises the new endpoint (catches missing JSON metadata at runtime).
-- [ ] `BannedSymbols.txt` unchanged unless the user explicitly approves a new banned API.
+The template chooses AOT-safe packages only. The OpenBao client is hand-written because the available Vault
+clients depend on reflection or Newtonsoft.Json. Before adding a package, check that it is trimming/AOT
+compatible; if it is not, write the small adapter instead of suppressing the warning.

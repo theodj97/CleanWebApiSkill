@@ -1,142 +1,156 @@
 # Security
 
-## Two authentication modes
+JWT authentication in two explicit modes, four role policies, and ownership decided from the token. This
+reference covers the wiring, the rules and the test identities.
 
-`AuthenticationSettings.Load` selects the mode from `Authentication:Mode`, or infers it from
-`Authentication:Authority` when the mode is empty (an authority means OIDC; no authority means the local
-symmetric key).
+## Modes
 
-| Mode | Signing | Authority | Key | Use |
-|---|---|---|---|---|
-| `Symmetric` | HS256 | Must be empty | `API_KEY` from OpenBao, ≥ 32 UTF-8 bytes | Local development and tests |
-| `Oidc` | Provider keys | Absolute HTTPS URI | Ignored | Deployed environments |
+`AuthenticationSettings.Load(configuration, appSettings)` resolves one mode:
 
-`ConfigureServices.ConfigureAuth`:
-
-- sets `RequireHttpsMetadata = true`;
-- sets `Audience`, `MapInboundClaims = true`, and `Authority` only in OIDC mode;
-- validates issuer, audience, lifetime and signing key;
-- pins `ValidAlgorithms = [SecurityAlgorithms.HmacSha256]` in Symmetric mode (a token signed with another
-  algorithm is rejected);
-- registers the four policies before the bearer handler.
-
-Invalid combinations fail at startup: Symmetric with an authority, OIDC without an authority or with a
-non-HTTPS one, a missing/short `API_KEY` in Symmetric mode.
-
-## Claims
-
-`MapInboundClaims = true` maps the short JWT claims to .NET claim types:
-
-| JWT claim | .NET claim | Read by |
+| Mode | When | Keys |
 |---|---|---|
-| `email` | `ClaimTypes.Email` | `HttpContextCurrentUser.Email`, the email assertion in every policy |
-| `role` | `ClaimTypes.Role` | `RequireRole(...)` |
+| **Symmetric** | `Authentication:Mode` is `Symmetric`/`local`, or empty with no authority. Local and tests. | `API_KEY` (HS256, at least 32 UTF-8 bytes); `Authority` must be empty. |
+| **Oidc** | `Authentication:Mode` is `Oidc`, or empty with an authority. Deployed. | Absolute HTTPS `Authority`; `API_KEY` is ignored. |
 
-The API also accepts a literal `"email"` claim in `HasEmailClaim` for providers that do not use the mapped
-type. `HttpContextCurrentUser` checks `ClaimTypes.Email` first, then `"email"`.
+The mode is never mixed: a symmetric key with an authority, or the reverse, fails at startup with a clear
+message instead of guessing.
 
-A token without an email claim is authenticated but fails every policy → `403`. A token without a role also
-gets `403`. A missing, malformed, expired, wrong-issuer, wrong-audience, wrong-key or unsigned token gets `401`.
+`ConfigureAuth`:
 
-## Policies
+- `AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(...)`;
+- `RequireHttpsMetadata = true`, `MapInboundClaims = true`;
+- `ValidateIssuer`, `ValidateAudience`, `ValidateLifetime`, `ValidateIssuerSigningKey` all true;
+- `ValidIssuers` from configuration; in Symmetric mode `IssuerSigningKey` from `API_KEY` and
+  `ValidAlgorithms = [HmacSha256]` (the local key is only accepted as HS256);
+- in Oidc mode `Authority` is set and the metadata is downloaded over HTTPS.
 
-| Policy | Roles admitted | Typical use |
+A token without an `email` claim is authenticated but fails every policy (`HasEmailClaim` assertion) → 403.
+
+## Policies and roles
+
+| Policy | Accepted roles | Intent |
 |---|---|---|
-| `User` | User, Operator, Admin | Read, create, update own resources |
-| `Operator` | Operator, Admin | Delete own resources, operational actions |
-| `Admin` | Admin | Every resource, every owner |
-| `External` | External, Operator, Admin | External integrations; no route uses it yet |
+| `User` | User, Operator, Admin | Read, create and update the caller's items. |
+| `Operator` | Operator, Admin | Delete the caller's items (admins can delete any). |
+| `Admin` | Admin | See and act on every owner. |
+| `External` | External, Operator, Admin | Reserved for system/third-party integrations; no route uses it yet. |
 
-Every policy also requires an email claim. The policy names are in `Constants` (`ADMIN_POLICY`,
-`OPERATOR_POLICY`, `USER_POLICY`, `EXTERNAL_POLICY`) and are used both as role values and policy names.
+Policies are registered in `ConfigureAuth` with `RequireRole(...)` plus `RequireAssertion(HasEmailClaim)`.
+`Constants.AuthorizationPolicies` lists all four, and `ConstantsTests` asserts the list. A new policy is added
+in three places: `Constants`, `ConfigureAuth`, and the test that enumerates the policies. Role names are the
+values the tokens carry.
+
+Route groups apply the policy:
+
+```csharp
+RouteGroupBuilder userGroup = app.CreateAuthorizedRouteGroupBuilder("todos", "Todos", [Constants.UserPolicy]);
+RouteGroupBuilder operatorGroup = app.CreateAuthorizedRouteGroupBuilder("todos", "Todos", [Constants.OperatorPolicy]);
+```
+
+Write operations go on the narrowest group that needs them: `DELETE` on `Operator`, the rest on `User`.
 
 ## Ownership
 
-`ICurrentUser` (Application) is the only way Application sees the caller:
+`ICurrentUser` is the Application's view of the caller:
 
 ```csharp
 public interface ICurrentUser
 {
-    string Email { get; }
+    string Email { get; }        // throws when the principal has no email claim
     bool IsAdmin { get; }
     OwnerScope Owner { get; }
 }
 ```
 
-`OwnerScope` is a value type in `Application/Abstractions/Identity`. `HttpContextCurrentUser` (Api) reads the
-claims and builds it with `new(Email, IsAdmin)`. The rule lives in the value type, not in the HTTP mappers:
+`HttpContextCurrentUser` reads `ClaimTypes.Email` (or the short `email` claim, because `MapInboundClaims` maps
+it) and `IsInRole(Constants.AdminPolicy)`. `OwnerScope` turns that into the three questions:
 
-- `VisibleOwner`: `null` for admins (every owner), the caller email for everyone else (read/filter/delete).
-- `OwnerForCreate`: the caller email for everyone, including admins.
-- `FilterOwners(requested)`: the requested owners for admins, `[caller]` for everyone else.
+| Member | Result |
+|---|---|
+| `VisibleOwner` | `null` for admins, the caller's email otherwise. Single-item reads, updates, deletes. |
+| `OwnerForCreate` | Always the caller's email, even for admins. |
+| `FilterOwners(requested)` | Admins get the requested owners (or none); everyone else is pinned to their own email. |
 
 Rules:
 
-- The owner filter passed to a repository is `currentUser.Owner.VisibleOwner` or
-  `currentUser.Owner.FilterOwners(requested)`, never a raw body/query value.
-- An admin-only `createdBy` filter is allowed only when `Owner.IsAdmin`; non-admins are pinned to their own
-  email in `ToInput`.
-- A non-admin reading/updating/deleting another owner's row gets the same answer as a missing row (`404` or a
-  `false`/empty result), not a `403` that confirms the row exists.
-- The stored row's `CreatedBy` is the owner for update-time uniqueness checks; an admin updating another user's
-  row checks against that user's names/titles.
-- Audit fields (`CreatedBy`, `UpdatedBy`) come from the token (`Owner.Email`), not from the request.
-- `OwnerScopeTests` covers the three methods; `HttpContextCurrentUserTests` covers the claim adapter.
+- The owner is **never** read from a request body. `{Verb}{Feature}Request.ToInput(owner)` sets it from the
+  `OwnerScope`.
+- Non-admins see and change only their own rows. An invisible row is indistinguishable from a missing one:
+  `GET`/`PUT` → 404, `DELETE` → 404 (not 403), list endpoints silently scope the filter.
+- Admins may read and change any row. Creating always makes the admin the owner.
+- An update that changes the title checks uniqueness against the owner of the **stored** row, not the caller.
+- `DbContext`-style global filters do not exist here: the scope is passed to the port as
+  `string? visibleOwner` (or `Owners` in a filter) and applied in SQL.
 
-## Adding a role or policy
+Consequences for handlers:
 
-1. Add the policy/role constant to `Api/Configuration/Constants.cs` and include it in
-   `AuthorizationPolicies` if it is a first-class policy.
-2. Add the policy in `ConfigureServices.ConfigureAuth` with `RequireRole(...)` and the email assertion.
-3. Map the new route group or endpoint with the narrowest policy in `CreateAuthorizedRouteGroupBuilder`.
-4. Add the role to `TestUser`/`TestUsers` for the test identities that need it; keep the existing identities.
-5. Add a profile to `local/tools/devtoken.json` and a user to `local/openapi/users.json` (same email/role) so
-   local development can exercise it.
-6. Add the authorization matrix tests: anonymous `401`, authenticated without role `403`, wrong role `403`,
-   allowed role `2xx`, and (for owner-scoped routes) another owner's row.
-7. Update the API table in `README.template.md` / `README.md`.
+```csharp
+TodoEntity? todo = await repository.GetByIdAsync(id, input.VisibleOwner, ct);
+if (todo is null)
+    return Result<TodoDto>.Failure(new NotFoundError("ID was not found."));
+```
 
-**Done when:** the policy has a test for every admitted role and one for a rejected role; local profiles and
-test users use the same role strings; the OpenAPI description names the policy.
+`VisibleOwner = null` means "every owner" and is only produced for admins, because the mapper derived it from
+`OwnerScope`.
+
+## 401 vs 403
+
+| Situation | Status |
+|---|---|
+| No token, malformed token, expired, not yet valid, wrong issuer/audience/key/algorithm, unsigned | 401 |
+| Valid token without a role the policy accepts | 403 |
+| Valid token with the right role but no `email` claim | 403 |
+| Visible row missing, or owned by someone else and the caller is not an admin | 404 |
+| Delete of an invisible/unknown row | 404 |
+
+The API never returns 403 for ownership: it hides the row.
+
+## Why the email
+
+The owner is the token's `email` claim. It is readable, it matches the devtoken profiles and the seed, and it
+is the claim the local sidecar and every OIDC provider can emit. The trade-off is recorded in
+`docs/adr/0009-owner-identified-by-email.md`: changing an email in the identity provider orphans that user's
+rows, and a provider that omits the claim makes the API return 403. If a deployment needs stable identities,
+change the claim mapping in `HttpContextCurrentUser` (the single place) and migrate the columns.
 
 ## Test identities
 
-`TestUser` covers one identity per role plus two negative cases:
+`tests/CleanWebApiTemplate.Tests.Shared/Auth` defines one identity per role plus two negative cases:
 
-| `TestUser` | Role | Expected on `User` routes | Expected on `Operator` routes |
-|---|---|---|---|
-| `TodoUser` | `User` | 2xx | 403 |
-| `TodoOperator` | `Operator` | 2xx | 2xx |
-| `TodoAdmin` | `Admin` | 2xx | 2xx |
-| `TodoExternal` | `External` | 403 | 403 |
-| `AuthenticatedWithoutRoles` | — | 403 | 403 |
-| `AuthenticatedWithoutEmail` | `User` | 403 (policy email assertion) | 403 |
+| `TestUser` | Role | Expected |
+|---|---|---|
+| `TodoUser` | User | read/create/update own; delete → 403 |
+| `TodoOperator` | Operator | read/create/update/delete own |
+| `TodoAdmin` | Admin | everything, any owner |
+| `TodoExternal` | External | 403 on every Todo route (no route uses the policy) |
+| `AuthenticatedWithoutRoles` | — | 403 on every protected route |
+| `AuthenticatedWithoutEmail` | User, no email | 403 before the handler |
 
-The names carry `Todo` because they are the sample identities; when the sample is removed, rename them to the
-new feature if the user wants, but keep one identity per role and the two negative cases. `TestUsers.Email`
-returns the email stored in `CreatedBy`/`UpdatedBy`.
+Tokens are signed locally per run (`TestTokenIssuer`, HS256) and never come from a login endpoint. The
+`InvalidToken` enum lists the eight rejection cases (`Malformed`, `Expired`, `NotYetValid`, `WrongIssuer`,
+`WrongAudience`, `SignedWithUnknownKey`, `WrongAlgorithm`, `Unsigned`). The component suite covers all eight;
+the functional suite covers all except `WrongAlgorithm` (the API runs as a separate process; the case is
+covered in-process).
 
-`TestTokenIssuer` signs tokens per run with a random key. It never writes a token or key to disk and never
-calls a login endpoint. The applications receive only validation material through `AppHostContract.JwtTrust`.
+`local/tools/devtoken.json` defines the same identities for the local environment (`user`, `operator`,
+`admin`, `external`, `no-role`) with the same emails as the seed. The Swagger sidecar mints the same tokens
+from `local/openapi/users.json`.
 
 ## Local tokens
 
-- `dotnet local/tools/devtoken.cs init` creates the HS256 key in the AppHost user secrets.
-- `devtoken list` shows profiles; `devtoken get --profile user` prints a token on stdout.
-- The local Swagger sidecar mints the same tokens for its profile picker from `local/openapi/users.json`;
-  see `local-swagger.md`.
-- The issuer/audience come from `appsettings.json` and the AppHost, not from the token.
-- Never commit a token or key; never paste one into a report. The dashboard URL contains a login token: do not
-  share it.
+```bash
+dotnet local/tools/devtoken.cs init [--rotate]        # HS256 key in the AppHost user secrets
+dotnet local/tools/devtoken.cs list                   # profiles, roles and audiences
+dotnet local/tools/devtoken.cs get --profile user     # token on stdout, 60 minutes by default
+dotnet local/tools/devtoken.cs dotenv .env            # DEVTOKEN_<PROFILE> lines for scripts
+```
 
-## Troubleshooting
+`--lifetime` accepts 1–1440 minutes. The key never leaves the user-secrets file; the AppHost passes it to
+`openbao-init` and to the sidecar, and the application reads it from OpenBao. Do not commit a token, print a
+key, or log either one.
 
-| Symptom | Cause / fix |
-|---|---|
-| 401 on every authenticated test | Trust mapping (issuer/audience/key) or claim types differ from what the app validates. Check `TestAuthSettings` and `AppHostContract.JwtTrust`. |
-| 403 where success was expected | Token accepted; role or claim type/value does not match the policy, or the email claim is missing. |
-| 200 where 403 was expected | The route group uses a broader policy, or the endpoint is not in the group. |
-| A user sees another owner's row | `Owner.VisibleOwner` was not passed to the repository, or the repository ignored `createdBy`. |
-| Admin cannot see other owners | `Owner.VisibleOwner` is `null` and the admin `createdBy` filter is dropped; check `ToInput` and `FilterOwners`. |
-| `JwtBearer scheme '…' would download metadata` | `Authority`/`MetadataAddress` not cleared in the test mapping. |
-| Local tokens rejected after a restart | The key was rotated; restart the AppHost and select a profile again (`devtoken init --rotate` changes it). |
+## Native AOT and security
+
+The OpenBao client is hand-written because the reflection-based Vault clients break the AOT publish.
+`RequireHttpsMetadata = true` is deliberate: metadata over plain HTTP is never allowed, even if a
+misconfigured authority points at `http://`.
