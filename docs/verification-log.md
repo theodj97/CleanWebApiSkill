@@ -87,3 +87,42 @@ through `Aspire.Hosting.Testing`; the Aspire CLI was not exercised in this run.
   `../clean-webapi/references/quality-gates.md`; the individual build/publish/test gates above were run instead.
 - A manual `aspire start` + dashboard/Swagger UI walkthrough. The component and functional suites start the same
   AppHost and were run end to end.
+
+## 2026-11-13 — Sync with CleanWebApiTemplate 2.0.0
+
+**Method:** replaced the whole `clean-webapi/` folder with the skill the template ships in
+`.opencode/skills/clean-webapi` (template commit `919dd5f`, the 2.0.0 content), and copied the evals from the
+template's maintainer-only skill into `evals/`. Rewrote this repository's README for the new layout, the
+installation precedence and the literal-name caveat.
+
+**What changed in the skill against the previous version:**
+
+1. Feature-first layout: `Domain/{Feature}`, `Application/{Feature}/{UseCase}`, `Infrastructure/{Feature}`,
+   `Api/{Feature}`; shared code under `Common`.
+2. `AddUseCase<TInput, TResult, THandler, TValidator>()`, one composition module per feature and startup checks
+   that really build every use case (the previous text promised `ValidateOnBuild` would reject an empty set).
+3. `NpgsqlDataSource` instead of the connection factory; every secret, including the connection string, comes
+   from OpenBao in every mode.
+4. HTTP contract: 404 for a missing or invisible row, `200 []` for an empty list, 204 for a successful delete;
+   routes are lowercase and plural.
+5. `Api.UnitTests` renamed to `UnitTests`; architecture tests follow the folder convention instead of naming
+   `Todo`.
+6. The `Project` example is a complete slice (CRUD, projection, SQL, seed, OpenAPI examples and tests) under
+   `assets/examples/src`, `assets/examples/tests` and `assets/examples/local`, mirroring the repository paths.
+7. No `{App}` placeholders, no companion-skill references, no evals inside the skill.
+
+**Verification:**
+
+- `diff -r <template>/.opencode/skills/clean-webapi ./clean-webapi` → no differences (98 files).
+- `diff -r <template>/.opencode/skills/template-maintainer/evals ./evals` → no differences.
+- Template package smoke test with Native AOT (2026-11-12): the package installs in an isolated hive, generates
+  a project with the skill, the commands, the reviewer, `GLOSSARY.md` and the ADRs; `template-maintainer` is
+  absent; no `CleanWebApiTemplate` remains in names or content; 158 unit + 13 architecture + 33 sidecar tests
+  pass; the AOT publish succeeds.
+- `Project` example injected into a clean copy of the template: build 0 warnings; 196 unit + 13 architecture
+  tests; 217/218 component tests; 22 functional tests. The single component failure is
+  `OpenApiContractTests.Document_ContainsEveryTodoOperation`, which asserts the exact operation-id set and is
+  expected to fail when a feature is added; the example documents the update.
+
+**Not run:** a manual `aspire start` + Swagger UI walkthrough. The component and functional suites start the
+same AppHost, and the catalog is covered by the sidecar unit tests.

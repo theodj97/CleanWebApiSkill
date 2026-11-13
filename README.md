@@ -2,11 +2,10 @@
 
 # CleanWebApiSkill
 
-**One agent skill to extend a Clean Web API Template repository without breaking its architecture.**
+**The `clean-webapi` agent skill for repositories generated from Clean Web API Template.**
 
-Clean Architecture layers · Minimal API endpoints · Result/Error · FluentValidation · ADO.NET/Npgsql ·
-OpenBao secrets · JWT policies and owner scoping · Native AOT · Aspire local environment ·
-unit, component, functional and architecture tests.
+Clean Architecture · Minimal APIs · Result/Error · FluentValidation · ADO.NET/Npgsql · OpenBao ·
+JWT policies and owner scoping · Native AOT · Aspire · unit, component, functional and architecture tests.
 
 [![Agent Skills](https://img.shields.io/badge/agent%20skills-SKILL.md-000000)](https://skills.sh)
 [![.NET](https://img.shields.io/badge/.NET-10-512BD4?logo=dotnet&logoColor=white)](https://dotnet.microsoft.com)
@@ -18,108 +17,134 @@ unit, component, functional and architecture tests.
 
 ---
 
-## What it does
+## What this repository is
 
-`clean-webapi` is a skill for AI coding agents working on a repository generated from
-[`CleanWebApiTemplate`](https://github.com/theodj97/CleanWebApiTemplate): an ASP.NET Core 10 Minimal API with
-Clean Architecture, Native AOT, JWT authentication, PostgreSQL, OpenBao and Aspire.
+A **mirror** of the skill that Clean Web API Template ships in `.opencode/skills/clean-webapi` since version
+**2.0.0**. The template is the source of truth; this repository distributes the same content outside the
+template and for agents whose tooling does not read `.opencode`.
 
-It gives the agent the repository's **unwritten rules**: where each type belongs, what to name it, which
-registrations a new feature needs, which test project proves which behaviour, and which gates must be green
-before a change is done. It also ships a second worked feature (`Project`) so the agent does not need to copy
-the template's sample (`Todo`).
+The skill gives an agent the repository's unwritten rules: where each type belongs, what to name it, which
+registrations a feature needs, which test project proves which behaviour, and which gates must be green before
+a change is done. It also ships a complete second feature (`Project`) so the agent does not need to copy the
+template's sample (`Todo`).
 
 | | |
 |---|---|
-| 🧭 **One vertical slice, every layer** | A touch list from Domain to SQL, API registration, OpenAPI, seed and tests. |
-| 🧱 **Architecture enforced, not suggested** | `Api → Application → Domain`, `Api → Infrastructure → Application`; the architecture tests and `BannedSymbols.txt` back it up. |
-| 🔤 **Naming law** | `Request → Input → Entity → Dto/Projection → Response`, `E` enums, `I` ports, `{Verb}{Feature}Handler`, `{Feature}Endpoints`, `{Feature}SortCatalog`, `Method_Scenario_ExpectedResult`. |
-| 🧩 **Patterns with their reasons** | `Result<T>`/`Error`, `IHandler<TInput, TResult>`/`ValidationService`/`ValidatorSet<T>`, ADO.NET repositories, explicit DI, no assembly scanning, no MediatR, no EF. |
-| 🔐 **Security by default** | JWT modes, role policies, email claim, `OwnerScope` value type, 401 vs 403, locally signed test tokens. |
-| 🗄 **Schema and secrets** | Ordered SQL scripts, seed, parameterised queries, sort catalogs and column maps, OpenBao, AppHost secrets. |
-| 🚀 **Native AOT** | Source-generated JSON, request delegates, no reflection, no `dynamic`, no suppressions; `dotnet publish` is the gate. |
-| 🧪 **Tests that earn their name** | What unit, component, functional and architecture tests prove, with fixtures, resets, builders and identities. |
-| 🏭 **Aspire + Swagger** | The single AppHost, its modes, `db-init`, `openbao-init`, `devtoken`, and the local Swagger sidecar with an executable example for every endpoint. |
-| ✅ **Gates** | Build, format, analyzers, all tests, coverage thresholds, vulnerable packages and commit convention. |
+| One vertical slice | A touch list from Domain to SQL, module registration, JSON context, OpenAPI, seed and tests. |
+| Architecture enforced | `Api → Application → Domain`, `Api → Infrastructure → Application`; the architecture tests and `BannedSymbols.txt` back it up. |
+| Naming law | `Request → Input → Entity → Dto/Projection → Response`, `E` enums, `I` ports, `{Verb}{Feature}Handler`, `{Feature}Endpoints`, `{Feature}SortCatalog`, `Method_Scenario_ExpectedResult`. |
+| Patterns with reasons | `Result<T>`/`Error`, `IHandler<TInput, TResult>`/`ValidationService`/`ValidatorSet<T>`, `AddUseCase`, feature modules, ADO.NET over `NpgsqlDataSource`, no assembly scanning, no mediator, no EF. |
+| Security by default | JWT modes, role policies, email claim, `OwnerScope`, 401 vs 403, locally signed test tokens. |
+| Schema and secrets | Forward-only SQL scripts, seed, parameterised queries, sort catalogs and column maps, OpenBao for every secret. |
+| Native AOT | Source-generated JSON, request delegates, no reflection, no `dynamic`, no suppressions; `dotnet publish` is the gate. |
+| Tests that earn their name | What unit, component, functional and architecture tests prove, with fixtures, resets, builders and identities. |
+| Aspire + Swagger | The single AppHost, its modes, `db-init`, `openbao-init`, `devtoken`, and the Swagger sidecar with an example for every endpoint. |
+| Gates | Build, format, analyzers, all tests, coverage thresholds, vulnerable packages and commit convention. |
+
+---
+
+## Compatibility
+
+| Template version | Skill |
+|---|---|
+| **2.0.0 and later** | This content. The template already includes it in every generated project. |
+| 1.1.0 and earlier | Not supported. The layout, the HTTP contract and the composition model changed in 2.0.0; use the template repository's history if you need the old skill. |
 
 ---
 
 ## Install
 
-Copy the skill folder into the target repository:
+A project generated by **2.0.0 or later already has the skill** in `.opencode/skills/clean-webapi`; nothing to
+do. Copy it only when the template did not ship it (older generated project) or when the agent's tooling does
+not read `.opencode`:
 
 ```bash
-cp -r clean-webapi <target-repo>/.agents/skills/
-# or, for agents that read the .claude convention
-cp -r clean-webapi <target-repo>/.claude/skills/
+# OpenCode (highest precedence for project skills)
+cp -r clean-webapi <repo>/.opencode/skills/
+# Other agents that read the compatibility folders
+cp -r clean-webapi <repo>/.agents/skills/
 ```
 
-The folder must stay named `clean-webapi`: it matches `name` in `SKILL.md` and skill names are lowercase
-with hyphens. Keep it in a hidden folder so the `.cs` examples are not picked up by the .NET build.
-`CleanWebApiTemplate` ignores `.agents/` and excludes it from `dotnet new`, so the installed copy never
-reaches a generated project.
+Keep the folder named `clean-webapi`: it is the skill ID. Keep it in a hidden folder so the `.cs` files of the
+worked example are not picked up by the .NET build.
 
-The skill is **not** included in projects generated by `dotnet new clean-webapi`; install it separately when
-you want an agent to work on the generated project.
+### Names are literal
+
+The skill uses `CleanWebApiTemplate` names (`CleanWebApiTemplate.Api`, `CleanWebApiTemplate.Application`, …).
+`dotnet new` rewrites the copy that travels inside the template to the generated project's name; this mirror is
+**not** rewritten. The agent still maps the layers correctly, but if you install this copy into a project with
+another name, expect the paths to differ and rely on the folder convention (`Api/{Feature}`, …) rather than on
+the literal prefix.
+
+### Precedence
+
+OpenCode resolves skills by ID, and the later source wins:
+
+```text
+.agents/skills  <  .claude/skills  <  ~/.config/opencode/skills  <  .opencode/skills
+```
+
+Installing this copy on top of a project that already ships the skill creates two definitions of the same ID;
+the project one wins unless you overwrite it or add an explicit `skills` entry in `opencode.json`. Prefer the
+shipped copy.
 
 ---
 
 ## Usage
 
-The skill triggers on natural language and accepts explicit modes:
+The skill is advertised automatically when a request matches its description; mention `clean-webapi` to load it
+explicitly:
 
 ```text
-/clean-webapi add a Project feature with create, get and filter
-/clean-webapi add a component test for POST /api/Project
-/clean-webapi add a Priority column to the Todo table
-/clean-webapi add a Reports role that can read every owner's projects
-/clean-webapi run the local environment and verify the new endpoint in Swagger
-/clean-webapi review the working tree against the repository conventions
-/clean-webapi explain what each test project is for
-/clean-webapi remove the Todo sample feature
+Add a Project feature with create, get by id, update, delete and filter.
+Add a component test for POST /api/todos that proves a duplicate title returns 409.
+Add a Priority column to Todo, with validation, seed, OpenAPI and tests.
+Add a Reports role that can read every owner's projects but cannot write.
+Review this working tree against the repository architecture and conventions.
+Remove the Todo sample feature and keep the local environment starting.
 ```
 
-A substantial change (new table, new secret, new policy, more than one project) gets a short plan and waits
-for confirmation before editing files. Small changes proceed and end with the gates.
+A substantial change (new table, new secret, new policy, more than one project) gets a short plan and waits for
+confirmation before editing files. Small changes proceed and end with the gates. The template also ships
+`.opencode/commands/{feature,endpoint,verify,remove-sample}.md` and a read-only reviewer agent; they are not part
+of this skill.
 
 ---
 
-## Repository layout
+## Layout
 
 ```text
 .
 ├── clean-webapi/
-│   ├── SKILL.md                        Entry point: modes, non-negotiables, phases, reference map
-│   ├── evals/
-│   │   ├── README.md                   What each eval needs from the target repository
-│   │   └── evals.json                  Prompts, expected results and verifiable expectations
+│   ├── SKILL.md                        Entry point: non-negotiables, modes, phases, reference map
 │   ├── references/
-│   │   ├── architecture.md             Layers, dependency rule, request lifecycle, patterns and why
-│   │   ├── conventions.md              Naming, folders, file-per-type, SQL and test naming
-│   │   ├── feature-slice.md            The touch list for a new feature, projection or removal
-│   │   ├── api.md                      Route groups, endpoint adapter, Result→HTTP, ProblemDetails, OpenAPI
-│   │   ├── persistence.md              ADO.NET, SQL scripts, seed, sort catalog + column map, unique index
-│   │   ├── configuration-and-secrets.md AppSettings, SectionBase, OpenBao, AppHost, test contract
-│   │   ├── security.md                 JWT modes, policies, claims, OwnerScope value type, test identities
-│   │   ├── testing.md                  What each test project covers, fixtures, attributes, builders
-│   │   ├── test-catalog.md             What each existing test class protects, and which suite to run
-│   │   ├── aspire.md                   The single AppHost, modes, resources, devtoken, dashboard
-│   │   ├── local-swagger.md            Local run, Swagger sidecar, examples catalog, mandatory endpoint examples
-│   │   ├── native-aot.md               Rules, common IL warnings, fixes and publish gate
-│   │   ├── quality-gates.md            Commands, coverage thresholds, hooks, commit convention
-│   │   ├── review-checklist.md         A diff review rubric for this architecture
-│   │   ├── glossary.md                 Ubiquitous language and the decisions behind the patterns
+│   │   ├── architecture.md             Layers, dependency rule, request lifecycle, ServiceDefaults, patterns and why
+│   │   ├── conventions.md              Naming law, folder map, type shape, C# style, routes, SQL and test naming
+│   │   ├── feature-slice.md            The touch list for a feature, an endpoint, a column and removing the sample
+│   │   ├── api.md                      Modules, AddUseCase, route groups, Result→HTTP, ProblemDetails, JSON, OpenAPI
+│   │   ├── persistence.md              NpgsqlDataSource, ADO.NET, SQL scripts, sort catalog + column map, conflicts
+│   │   ├── configuration-and-secrets.md AppSettings, SectionBase, OpenBao, AppHost, precedence, test contract
+│   │   ├── security.md                 JWT modes, policies, claims, OwnerScope, 401 vs 403, test identities
+│   │   ├── testing.md                  Test projects, fixtures, attributes, builders, resets, coverage
+│   │   ├── test-catalog.md             What each test class protects and which suite to run
+│   │   ├── aspire.md                   AppHost topology, modes, db-init, openbao-init, devtoken, dashboard
+│   │   ├── local-swagger.md            The local loop, the sidecar, the examples catalog contract
+│   │   ├── native-aot.md               Properties, banned APIs, source-generated JSON, warnings, publish gate
+│   │   ├── quality-gates.md            Commands, format, analyzers, tests, coverage, hooks, troubleshooting
+│   │   ├── review-checklist.md         A diff review rubric with hard rules and failure signals
+│   │   ├── glossary.md                 Technical vocabulary and the ADRs behind the patterns
 │   │   └── sources.md                  Official documentation and tested versions
-│   └── assets/examples/                An end-to-end second feature (`Project`: create/read/filter), independent of `Todo`
-│       ├── domain/                     Entity, enum, constraints
-│       ├── application/                Inputs, validators, handlers, DTOs, ports, filter, sort catalog
-│       ├── infrastructure/             Table, sort column map, ADO.NET repository
-│       ├── api/                        Requests, response, endpoint adapter, route group, registration
-│       ├── database/                   Schema and seed scripts
-│       ├── tests/                      Unit, component, functional, architecture, builders, sort alignment
-│       └── local/                      OpenAPI examples and AppHost notes
+│   └── assets/examples/                The complete `Project` feature, mirroring src/ and tests/
+│       ├── src/                        Domain, Application, Infrastructure and Api files
+│       ├── tests/                      Unit, component, functional and Tests.Shared files
+│       ├── local/                      Schema, seed and OpenAPI examples
+│       ├── README.md                   What the example contains and how to copy it
+│       └── FixtureRegistration.md      The four edits that wire it in
+├── evals/
+│   ├── README.md                       How to run the prompts and what state each needs
+│   └── evals.json                      Prompts, expected output and verifiable expectations
 ├── docs/
-│   └── verification-log.md             Maintainers only: how the example was verified
+│   └── verification-log.md             Maintainers only: what was verified and how
 └── README.md
 ```
 
@@ -129,32 +154,29 @@ for confirmation before editing files. Small changes proceed and end with the ga
 
 | | |
 |---|---|
-| 🧰 **.NET SDK** | 10.0.1xx, as pinned by the generated `global.json` (10.0.100, `latestFeature`). |
-| 🚀 **Aspire CLI** | 13.x for `aspire start` / `aspire run`; not needed for unit or architecture tests. |
-| 🐳 **Docker or Podman** | Component/functional tests and the local Aspire + Swagger loop start PostgreSQL and OpenBao containers. |
-| 🔐 **HTTPS dev certificate** | `dotnet dev-certs https --trust` for the Local API and Swagger sidecar; on Linux export `SSL_CERT_DIR`. |
-| 🟢 **Node.js** | Only for the repository's `npm run` gates (`verify`, `coverage`, `format`). |
-| 🌐 **No external services** | Tests and local development use locally signed JWTs and local containers; no identity provider, no real database. |
+| .NET SDK | 10.0.1xx, as pinned by the generated `global.json` (10.0.100, `latestFeature`). |
+| Aspire CLI | 13.6.x for `aspire start` / `aspire run`; not needed for unit or architecture tests. |
+| Docker or Podman | Component/functional tests and the local Aspire + Swagger loop. |
+| HTTPS dev certificate | `dotnet dev-certs https --trust`; on Linux export `SSL_CERT_DIR`. |
+| Node.js | Only for the repository's `npm run` gates (`verify`, `coverage`, `format`). |
+
+Tests and local development use locally signed JWTs and local containers: no identity provider and no real
+database.
 
 ---
 
-## Companion skills
+## Keeping the mirror in sync
 
-- **`aspire`** — use it to set up, repair or debug the local environment and the test infrastructure when the
-  repository has no AppHost, a broken one, or tests that do not use the shared AppHost; use
-  `aspire-orchestration` for the start/stop lifecycle. `clean-webapi` covers the template's own topology and
-  how a feature touches it.
-- **`code-review`** — use it for a full two-axis review (Standards + Spec). `review-checklist.md` is the
-  repository-specific standards input for that review.
-- **`tdd`** — use it when the user wants the feature built test-first.
-- **`diagnosing-bugs`** — use it when a failure resists a first glance. `clean-webapi` covers the common
-  template-specific symptoms.
+The template is the source of truth. After a change to the skill in the template:
 
----
+```bash
+rm -rf clean-webapi
+cp -a <template>/.opencode/skills/clean-webapi ./clean-webapi
+cp -a <template>/.opencode/skills/template-maintainer/evals/. ./evals/
+git add -A
+git commit -m "docs(clean-webapi): sync the skill with CleanWebApiTemplate <version>"
+```
 
-## Evals
-
-`clean-webapi/evals/evals.json` contains realistic prompts with expected results and verifiable expectations,
-in the older skill-creator `evals.json` schema. See
-[`clean-webapi/evals/README.md`](clean-webapi/evals/README.md) for the repository state each prompt needs.
-They are manual runs; migrating them to `evals/<case>/` folders would also let `claude plugin eval` run them.
+The invariant is `diff -r <template>/.opencode/skills/clean-webapi ./clean-webapi` with no output. The evals are
+copied from the template's maintainer skill, which is not distributed; they are manual prompts, not a test
+suite. Record the template commit in `docs/verification-log.md` after each sync.
